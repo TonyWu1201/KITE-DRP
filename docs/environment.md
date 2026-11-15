@@ -372,6 +372,8 @@ Windows 若提示"禁止运行脚本"：`powershell -ExecutionPolicy Bypass -Fil
 
 ## 12. CI 说明（`.github/workflows/ci.yml`）
 
+- 触发：仅手动 `workflow_dispatch`（GitHub → Actions → CI → Run workflow），
+  **不随 push / pull_request 自动运行**；需要自动 CI 时把对应触发器加回 `on:`；
 - 矩阵：`ubuntu-latest` + `windows-latest`，Python 3.12，uv 0.12.20；
 - 流程：`uv lock --check` → `uv sync --locked`（核心 + dev，**不装 CUDA extras**）→
   `uv run ruff check .` → `uv run ruff format --check .` → `uv run pytest -q`；

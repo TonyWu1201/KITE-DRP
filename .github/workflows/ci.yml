@@ -7,20 +7,20 @@
 #   - 依赖版本由 uv.lock 保证（uv sync --locked + uv lock --check）；
 #   - pyproject [tool.uv] 已限定 linux/win32 且显式钉 PyPI 官方索引，
 #     与本工作流矩阵一致（macOS 不在支持范围，见 ADR 0002）；
-#   - uv 版本固定：uv.lock 的格式版本随 uv 升级会变化，升级 uv 时需同步重跑 uv lock。
+#   - uv 版本固定：uv.lock 的格式版本随 uv 升级会变化，升级 uv 时需同步重跑 uv lock；
+#   - 触发方式：仅 workflow_dispatch（Actions 页手动 Run workflow），不随 push / PR
+#     自动运行；如需恢复自动 CI，把 push/pull_request 触发器加回 on: 即可。
 # =============================================================================
 name: CI
 
 on:
-  push:
-    branches: [main, master]
-  pull_request:
+  # 仅手动触发：GitHub → Actions → CI → Run workflow
   workflow_dispatch:
 
 permissions:
   contents: read
 
-# 同一分支的新推送会取消旧任务，节省 runner 时间
+# 同一分支的并发手动运行会取消旧任务，节省 runner 时间
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
