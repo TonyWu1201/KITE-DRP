@@ -1,0 +1,48 @@
+# =============================================================================
+# KITE-DRP 本机 Web 推理服务 —— 独立 uv 项目（不与仓库根项目共享环境）
+#
+# 设计约束（详见 deploy/README.md、docs/adr/0003-deploy-server-and-submodule.md）：
+#   1) 独立的 pyproject.toml + 独立的 .venv：从仓库根执行 `cd deploy/server && uv sync`
+#      即建立隔离环境，根项目环境**不安装** fastapi/uvicorn（见 [tool.uv] package=false）。
+#   2) 不加入根项目 uv workspace：本目录是独立可分发单元，未来可拆为 git submodule。
+#   3) 运行期 0 次外网请求（计划书 §9.3 #10）：基础依赖不含任何会联网的 SDK；
+#      ONNX Runtime 仅在显式 `uv sync --extra onnx` 时安装（模型包自带）。
+#   4) 前端静态资源全部本地（无 CDN/外部字体），见 app/static/。
+# =============================================================================
+
+[project]
+name = "kite-drp-server"
+version = "0.1.0"
+description = "KITE-DRP 本机 Web 推理服务（科研原型）：离线 FastAPI + 单页前端 + asyncio 任务队列"
+readme = "README.md"
+requires-python = ">=3.12"
+authors = [{ name = "KITE-DRP Team" }]
+dependencies = [
+  "fastapi>=0.115,<1.0",
+  "pydantic>=2.9,<3.0",
+  "uvicorn>=0.32,<1.0",
+]
+
+[project.optional-dependencies]
+# 可选：加载真实 ONNX 部署包时才需要（树莓派/医生站离线 wheelhouse 里预置）
+onnx = ["onnxruntime>=1.20,<2.0"]
+
+[dependency-groups]
+dev = [
+  "httpx>=0.27,<1.0",
+  "pytest>=8.3,<9.0",
+]
+
+[tool.uv]
+# 非打包项目：只建环境、不构建 wheel（服务以源码目录方式分发/部署）
+package = false
+
+[tool.pytest.ini_options]
+# 应用代码未被安装（[tool.uv] package=false），显式把项目根加入 sys.path
+testpaths = ["tests"]
+pythonpath = ["."]
+addopts = "-q --strict-markers"
+filterwarnings = [
+  # starlette 1.10 提示改用 httpx2；本项目按需保留 httpx（见任务约定），先忽略该提示
+  "ignore:Using .httpx. with .starlette.testclient. is deprecated.*:Warning",
+]

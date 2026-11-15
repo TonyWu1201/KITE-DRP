@@ -1,0 +1,25 @@
+# @package data
+# GDSC2 主训练集（计划书 §3.2 D11；标签方向约定见 §2.1）。
+name: gdsc2
+role: primary
+label:
+  # 主标签：药物内 z-score 后的 LN_IC50
+  key: ln_ic50_zscore
+  # 方向约定：敏感分数 s = -z(LN_IC50)，越大越敏感
+  sensitivity_sign: -1
+# 教师全组学 / 学生临床可及模态（§5.1、D2、D4）
+modalities:
+  teacher: [GE, MU, CNV, METH]
+  student: [MU, GE]
+# 组学来源：CCLE/DepMap
+omics_source: depmap
+# 原始文件（相对仓库根目录；raw 不提交 git，见 data/raw/README.md）
+raw_files:
+  dose_response: data/raw/gdsc/GDSC2_fitted_dose_response_27Oct23.csv
+  compounds: data/raw/gdsc/screened_compounds_rel_8.4.csv
+  depmap_model: data/raw/depmap/Model.csv
+  depmap_expression: data/raw/depmap/DepMap_ExpressionTPMLogp1HumanProteinCodingGenes.csv
+  depmap_mutations: data/raw/depmap/DepMap_SomaticMutations.csv
+  depmap_cnv: data/raw/depmap/DepMap_CNGeneWGS.csv
+# 外部验证顺序（§3.2 D12）：CTRPv2 → GDSC1→GDSC2 零样本 → PRISM → TCGA 子集
+external_validation: [ctrpv2, gdsc1]

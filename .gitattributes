@@ -1,0 +1,43 @@
+# =============================================================================
+# KITE-DRP .gitattributes — Git LFS 与大文件策略
+# 配套说明见 plans&notes/ 仓库结构文档；.gitignore 负责"不跟踪"，
+# 本文件负责"跟踪但走 LFS"。
+# =============================================================================
+
+# ---------------------------------------------------------------------------
+# 文本规范化：仓库内统一 LF，避免 Windows/Linux 换行差异
+# ---------------------------------------------------------------------------
+* text=auto eol=lf
+*.ps1 text eol=lf
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# ---------------------------------------------------------------------------
+# Git LFS：目录级规则
+# ---------------------------------------------------------------------------
+# 预处理后的数据（模型输入缓存，可由 raw + 预处理脚本重建）
+data/processed/**  filter=lfs diff=lfs merge=lfs -text
+# 数据划分文件（split_*.json 等，保证可复现）
+data/splits/**     filter=lfs diff=lfs merge=lfs -text
+# 端侧部署包（ONNX + 配置 + gene list + SHA256 打包产物）
+deploy/packages/** filter=lfs diff=lfs merge=lfs -text
+
+# ---------------------------------------------------------------------------
+# Git LFS：扩展名规则（兜底，防止大文件误入普通 git 历史）
+# ---------------------------------------------------------------------------
+*.pt          filter=lfs diff=lfs merge=lfs -text
+*.pth         filter=lfs diff=lfs merge=lfs -text
+*.ckpt        filter=lfs diff=lfs merge=lfs -text
+*.safetensors filter=lfs diff=lfs merge=lfs -text
+*.onnx        filter=lfs diff=lfs merge=lfs -text
+*.npz         filter=lfs diff=lfs merge=lfs -text
+*.npy         filter=lfs diff=lfs merge=lfs -text
+*.parquet     filter=lfs diff=lfs merge=lfs -text
+*.h5          filter=lfs diff=lfs merge=lfs -text
+*.hdf5        filter=lfs diff=lfs merge=lfs -text
+
+# ---------------------------------------------------------------------------
+# 占位文件必须保持为普通文本（后匹配覆盖前面的 LFS 规则，
+# 否则 data/processed/.gitkeep 等会被写成 LFS 指针）
+# ---------------------------------------------------------------------------
+**/.gitkeep -filter -diff -merge text

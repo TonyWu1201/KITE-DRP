@@ -1,0 +1,12 @@
+# @package paths
+# 仓库内相对路径（唯一路径来源，禁止绝对路径硬编码；计划书 §3.8、附录 B.2-1）。
+# 运行时由 kite_drp.common.paths 解析为绝对路径。
+data_dir: data
+raw_dir: data/raw
+interim_dir: data/interim
+processed_dir: data/processed
+splits_dir: data/splits
+licenses_dir: data/licenses
+experiments_dir: experiments
+checkpoints_dir: checkpoints
+docs_dir: docs

@@ -1,0 +1,26 @@
+# @package edge
+# 端侧部署与验收配置（计划书 §9；12 项验收见 §9.3）。
+platform: raspberry_pi_5
+ram_gb: 8
+compatible_floor: raspberry_pi_4b
+onnx_opset: 17
+batch_size: 1
+# 量化：Pi5 默认动态 INT8；Pi4 默认 FP32（Cortex-A72 无 SDOT，INT8 收益待实测）
+quantization:
+  default: int8_dynamic
+  fallback: fp32
+  calibration_samples: 300
+# 验收阈值（§9.3）
+acceptance:
+  p50_infer_ms: 20          # 硬上限 20ms；目标 FP32 ≤2ms / INT8 ≤0.5ms
+  p50_e2e_ms: 100
+  p95_e2e_ms: 200
+  cold_start_s: 5
+  max_rss_mb: 300
+  max_model_int8_mb: 1      # 硬上限 5MB
+  max_package_mb: 50
+  delta_auroc_max: 0.01
+  delta_auprc_max: 0.02
+  delta_rmse_rel_max: 0.03
+  delta_pearson_max: 0.03
+  stability_runs: 1000

@@ -1,0 +1,15 @@
+# @package teacher
+# T0 多模态交叉注意力教师（必做；§4.3）。对照 B0 双线性基线（b0.yaml）与
+# T1 异构图主教师（t1.yaml）。
+name: t0
+kind: cross_attention
+# 药物表示：GIN 分子图 + Morgan 指纹 + 靶点基因（§4.2 D3）
+drug_encoder: gin_morgan_targets
+d_model: 256
+n_heads: 4
+n_layers: 2
+dropout: 0.1
+# 教师输入模态（全组学；D2）
+modalities: [GE, MU, CNV, METH]
+# 规模预期：2–5M 参数（fp32 约 8–20MB；§4.5）
+params_target: 3_000_000

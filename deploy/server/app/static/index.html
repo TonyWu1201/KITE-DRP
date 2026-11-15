@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="color-scheme" content="light dark" />
+  <meta http-equiv="Content-Security-Policy"
+        content="default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data:; font-src 'none'; object-src 'none'; base-uri 'none'; form-action 'self'" />
+  <title>KITE-DRP 端侧推理 · 科研原型</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div id="demo-banner" class="banner banner-demo" hidden>
+    <strong>DEMO 模式</strong>
+    <span id="demo-reason"></span>
+    当前未加载真实 ONNX 模型：以下分数为确定性演示数据，<strong>不得用于科研结论或任何临床判断</strong>。
+  </div>
+
+  <div class="banner banner-notice">
+    ⚠️ 科研原型，不用于临床决策。本页面完全离线（无 CDN、无外部字体、无任何外联请求），
+    输入请使用伪名化样本 ID，禁止填入姓名、住院号等 PHI。
+  </div>
+
+  <header class="topbar">
+    <div class="brand">
+      <span class="logo" aria-hidden="true">K</span>
+      <div>
+        <h1>KITE-DRP 端侧推理服务</h1>
+        <p class="subtitle">知识引导的师生药敏预测 · 本机离线运行 · 仅 127.0.0.1</p>
+      </div>
+    </div>
+    <div class="health" aria-live="polite">
+      <span id="health-pill" class="pill pill-pending">连接中…</span>
+      <span id="health-meta" class="health-meta"></span>
+    </div>
+  </header>
+
+  <main class="layout">
+    <section class="card" aria-labelledby="form-title">
+      <h2 id="form-title">① 输入单样本数据</h2>
+      <form id="job-form" autocomplete="off" novalidate>
+        <div class="grid-2">
+          <label>样本 ID（伪名化）<span class="req">*</span>
+            <input id="sample-id" name="sample_id" maxlength="64" placeholder="如 DEMO-0001" required />
+            <small>仅允许字母/数字/._-；服务与日志均不记录真实身份信息</small>
+          </label>
+          <label>药物名称<span class="req">*</span>
+            <input id="drug" name="drug" maxlength="128" placeholder="如 Osimertinib" required />
+            <small>需与部署包药表一致（demo 模式不校验药表）</small>
+          </label>
+          <label>检测平台 / 方法（可选）
+            <input id="assay" name="assay" maxlength="128" placeholder="如 DNA panel + RNA-seq" />
+          </label>
+          <label>临床元数据（可选，JSON 对象）
+            <input id="meta" name="meta" placeholder='如 {"cancer_type": "LUAD", "stage": "IV"}' />
+            <small>只放低敏字段，不含 PHI</small>
+          </label>
+        </div>
+
+        <label class="block">突变<span class="req">*</span>
+          <textarea id="mutation" rows="4" placeholder='JSON：{"EGFR": 1, "TP53": 1}&nbsp;&nbsp;或粘贴文本：EGFR,TP53&nbsp;&nbsp;或：EGFR:1,KRAS:0'></textarea>
+          <small>1=突变，0=未突变；缺失基因请省略（不要用 0 冒充缺失）</small>
+        </label>
+
+        <label class="block">表达
+          <textarea id="expression" rows="4" placeholder='JSON：{"EGFR": 5.2, "MYC": 6.0}&nbsp;&nbsp;或粘贴文本：EGFR:5.2,MYC:6.0'></textarea>
+          <small>数值需与训练侧归一化一致（log2(TPM+1) 或通路分数）；突变与表达至少填写一项</small>
+        </label>
+
+        <p class="form-error" id="form-error" role="alert" hidden></p>
+        <div class="actions">
+          <button id="submit-btn" type="submit">提交预测任务</button>
+          <button id="example-btn" type="button" class="ghost">填入示例</button>
+          <span class="hint" id="parse-hint"></span>
+        </div>
+      </form>
+    </section>
+
+    <section class="card" aria-labelledby="result-title">
+      <h2 id="result-title">② 任务状态与结果</h2>
+      <div id="job-state" class="job-state">尚未提交任务。</div>
+
+      <div id="result" class="result" hidden>
+        <div class="score-block">
+          <div class="score-label">药敏响应分数</div>
+          <div id="res-score" class="score">—</div>
+          <div id="res-ci" class="score-ci">—</div>
+        </div>
+        <p id="res-sample" class="res-sample"></p>
+        <dl class="kv">
+          <dt>模型版本</dt><dd id="res-model">—</dd>
+          <dt>模型 SHA256</dt><dd id="res-sha" class="mono">—</dd>
+          <dt>推理引擎</dt><dd id="res-engine">—</dd>
+          <dt>推理耗时</dt><dd id="res-elapsed">—</dd>
+        </dl>
+        <div id="res-demo" class="demo-tag" hidden>DEMO 输出 · 禁止用于任何判断</div>
+        <h3>警示与免责声明</h3>
+        <ul id="res-warnings" class="warnings"></ul>
+        <div id="res-explain-wrap" hidden>
+          <h3>可解释性（demo 模式为伪归因）</h3>
+          <ul id="res-explanation" class="explanation"></ul>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <section class="card recent" aria-labelledby="recent-title">
+    <h2 id="recent-title">③ 最近任务（仅本机内存，服务重启后清空）</h2>
+    <table>
+      <thead>
+        <tr><th>任务 ID</th><th>样本</th><th>药物</th><th>状态</th><th>更新时间</th></tr>
+      </thead>
+      <tbody id="recent-body">
+        <tr><td colspan="5" class="empty">暂无任务</td></tr>
+      </tbody>
+    </table>
+    <p class="hint">点击任一行可载入该任务的状态与结果。</p>
+  </section>
+
+  <footer>
+    <p>
+      KITE-DRP · 端侧肿瘤药敏师生模型 · 本机离线服务（仅 127.0.0.1）·
+      科研原型，不用于临床决策 · 本页面无 CDN / 外部字体 / 外链
+    </p>
+  </footer>
+
+  <script src="app.js" defer></script>
+</body>
+</html>

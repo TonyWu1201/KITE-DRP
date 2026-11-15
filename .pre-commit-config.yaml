@@ -1,0 +1,43 @@
+# =============================================================================
+# KITE-DRP pre-commit 钩子配置
+#
+# 安装：uv run pre-commit install
+# 全量运行：uv run pre-commit run --all-files
+# 升级：uv run pre-commit autoupdate
+# 说明与验收命令见 docs/environment.md。
+#
+# 约定：
+#   1) ruff 版本（v0.17.5）与 uv.lock 中 dev 依赖锁定的 ruff 保持同一版本，避免
+#      pre-commit 与 `uv run ruff` 行为不一致；升级时两处一起改。
+#   2) 不设置 default_language_version：pre-commit 在 Linux 默认用 python3、
+#      在 Windows 默认用 python，跨平台更稳（本项目要求 Python 3.12，由 uv 提供）。
+#   3) *.gitkeep 是 data/** 等空目录的占位文件（空文件），end-of-file-fixer 与
+#      trailing-whitespace 会尝试改写它，必须排除（正则等价于 glob **/.gitkeep）。
+#   4) 大文件防线：data/ 原始数据不入库，processed/splits/checkpoints/packages 走
+#      Git LFS（见 .gitattributes），check-added-large-files 兜底拦普通 git 大文件。
+# =============================================================================
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.17.5
+    hooks:
+      - id: ruff-check
+        args: [--fix]
+      - id: ruff-format
+
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: check-yaml
+      - id: check-toml
+      - id: check-json
+      - id: end-of-file-fixer
+        # 排除 **/.gitkeep（pre-commit 的 exclude 是 Python 正则，按路径搜索）
+        exclude: '(^|/)\.gitkeep$'
+      - id: trailing-whitespace
+        args: [--markdown-linebreak-ext=md]
+        exclude: '(^|/)\.gitkeep$'
+      - id: check-merge-conflict
+      - id: check-added-large-files
+        args: [--maxkb=5120]
+      - id: detect-private-key
+      - id: check-case-conflict

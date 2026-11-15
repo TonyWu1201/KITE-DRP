@@ -1,0 +1,19 @@
+# @package student
+# A 档学生（默认）：纯 MLP + VAE，部署 ≈0.4M 参数、训练含解码器 ≈0.9M（§5.4–5.5，D6）。
+# 备选：B 档（更大容量）/ S-latent（冻结药潜向量表，端侧极限档）。
+name: a
+kind: mlp_vae
+# 学生输入：仅 panel 突变 + 表达（临床可及模态；D4、§5.1）
+input_modalities: [MU, GE]
+# VAE 补全目标：主补 CNV（METH 条件性；D5）；基因空间 M4 定稿（暂定 1,603 基因 PPI 子集）
+completion:
+  target: CNV
+  gene_space: ppi_subset_1603  # TODO(M4): 与教师图基因取交集后定稿
+latent_dim: 64
+vae_hidden_dims: [256, 128]
+drug_embedding_dim: 32
+predictor_hidden_dims: [192, 64]
+# 参数预算（验收硬上限 5M；§5.5）
+deploy_params_target: 400_000
+train_params_target: 900_000
+deploy_params_hard_limit: 5_000_000

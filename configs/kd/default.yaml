@@ -1,0 +1,18 @@
+# @package kd
+# 四层蒸馏配置（计划书 §6.2、D7）。
+# P0 主信号 = 潜向量对齐 + 样本关系对齐；P1 = 输出软标签/药物编码器/特权信息/缺失一致性；
+# P2 = 解释蒸馏（默认关闭，过门槛才启用）。
+layers: [latent, relation, soft]
+weights:
+  latent: 1.0
+  relation: 0.5
+  soft: 1.0
+  drug: 0.0
+  priv: 0.0
+  exp: 0.0
+temperature: 2.0
+# 课程式训练：先预热再逐步加蒸馏信号（§6.3）
+curriculum: true
+warmup_steps: 2000
+# 必做负对照：随机/打乱教师（§6.4）；训练脚本需支持 teacher=random 开关
+negative_controls: [random_teacher, shuffled_teacher]

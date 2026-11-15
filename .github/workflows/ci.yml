@@ -1,0 +1,68 @@
+# =============================================================================
+# KITE-DRP CI：Linux + Windows 双平台 / Python 3.12 / 只装核心+dev（不装 CUDA extras）
+#
+# 设计要点：
+#   - 不安装 torch / CUDA 依赖：CI runner 无 NVIDIA GPU，cu126 wheel 为 GB 级，
+#     GPU 相关验证由训练机执行（uv run python scripts/check_env.py --require-train）；
+#   - 依赖版本由 uv.lock 保证（uv sync --locked + uv lock --check）；
+#   - pyproject [tool.uv] 已限定 linux/win32 且显式钉 PyPI 官方索引，
+#     与本工作流矩阵一致（macOS 不在支持范围，见 ADR 0002）；
+#   - uv 版本固定：uv.lock 的格式版本随 uv 升级会变化，升级 uv 时需同步重跑 uv lock。
+# =============================================================================
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# 同一分支的新推送会取消旧任务，节省 runner 时间
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          # 数据/权重走 Git LFS，CI 不需要拉取（不安装 CUDA 依赖，也不跑数据测试）
+          lfs: false
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v10
+        with:
+          # 与本地开发一致的 uv 版本（升级 uv 时同步改这里并重跑 uv lock）
+          version: "0.12.20"
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
+
+      - name: Install Python 3.12
+        run: uv python install 3.12
+
+      - name: Verify lockfile (uv lock --check)
+        run: uv lock --check
+
+      - name: Sync dependencies (core + dev, 不含 CUDA extras)
+        run: uv sync --locked
+
+      - name: Lint (ruff check)
+        run: uv run ruff check .
+
+      - name: Format check (ruff format --check)
+        run: uv run ruff format --check .
+
+      - name: Test (pytest)
+        run: uv run pytest -q

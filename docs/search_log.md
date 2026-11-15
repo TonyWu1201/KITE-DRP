@@ -1,0 +1,17 @@
+# 文献检索记录（Search Log）
+
+计划书 §1.2 所述"据本课题组检索（截至 2026-11）"的检索式与记录汇总。
+由负责文献的成员/Agent 维护，每次检索追加一行。
+
+## 记录格式
+
+| 日期 | 数据库 | 检索式 | 命中数 | 筛选后保留 | 结论/备注 |
+|---|---|---|---|---|---|
+| 2026-11-09 | PubMed | `("drug response prediction" OR "drug sensitivity prediction") AND (knowledge distillation OR teacher-student) AND (graph neural network OR multi-omics)` | — | — | 计划书初稿检索，详见 `plans&notes/` 文献笔记 |
+| 待补 | — | — | — | — | 补录 2026-11 前的检索式与导出文件位置 |
+
+## 说明
+
+- 检索式需可复现：记录数据库、日期范围、语言限制、筛选标准；
+- 保留的文献全文/笔记按计划书约定存放（如 `plans&notes/papers/`，不放受限 PDF）；
+- 引用到计划书/论文的结论必须能回溯到这里的检索记录。

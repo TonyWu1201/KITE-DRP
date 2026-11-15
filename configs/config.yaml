@@ -1,0 +1,28 @@
+# @package _global_
+# KITE-DRP 实验根配置（Hydra）。
+# 用法（算法代码实现后）：
+#   uv run python -m kite_drp.train.teacher_train --config-name config teacher=t0 split=lco
+#   uv run python -m kite_drp.train.student_train --config-name config student=a kd=default
+defaults:
+  - paths: default
+  - data: gdsc2
+  - split: lco
+  - teacher: t0
+  - student: a
+  - kd: default
+  - edge: pi5
+  - _self_
+
+# 全局随机种子；主结果至少 3 seeds（计划书 §7.1）
+seed: 0
+# 运行名；null 表示由 Hydra 时间戳/任务名自动生成
+run_name: null
+
+hydra:
+  run:
+    dir: experiments/${now:%Y-%m-%d_%H-%M-%S}_${hydra.job.name}
+  sweep:
+    dir: experiments/sweeps/${now:%Y-%m-%d_%H-%M-%S}
+    subdir: ${hydra.job.num}
+  job:
+    chdir: false

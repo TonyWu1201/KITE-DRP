@@ -1,0 +1,11 @@
+# @package split
+# 划分协议 LCO（leave-cell-out，主协议；计划书 §7.2 P0）。
+# random 划分仅作与文献对比的上限参考，不作为主要结论（§7.1）。
+protocol: lco
+level: cell_line
+n_folds: 5
+seed: 0
+# 分组键：Sanger 细胞系 ID；同源/重复细胞系必须同组（§3.5 泄漏审查）
+group_key: sanger_model_id
+# 记录并检查组织类型/起源偏差
+bias_check: true

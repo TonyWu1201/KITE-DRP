@@ -1,0 +1,293 @@
+# =============================================================================
+# KITE-DRP Python 依赖与工具链配置（uv 项目）
+#
+# 依据：
+#   - plans&notes/端侧肿瘤药敏师生模型_详细计划书.md §9（端侧栈）、§13.3（软件工具链）、
+#     附录 B.2（工程规范）
+#   - docs/environment.md（环境安装与排障手册）
+#   - docs/adr/0002-python-environment-cuda126.md（CUDA 12.6 / torch 2.14.1 决策记录）
+#
+# 平台：Windows 10/11 x64 + Ubuntu 22.04/24.04 x64（manylinux_2_28，glibc ≥ 2.28）；
+#       macOS 不支持（PyTorch 不为 cu126 提供 macOS wheel，见 [tool.uv] environments）。
+# Python：3.12（与 .python-version 一致）。
+# CUDA：固定 12.6（cu126）—— torch 通过下方专用 index 安装，不用 PyPI 默认构建。
+#
+# 常用命令（详见 docs/environment.md）：
+#   uv sync                                # 核心依赖 + dev 组（无 GPU 也可用）
+#   uv sync --extra deploy --extra clinical  # 导出/量化 + 临床验证（CPU 可跑）
+#   uv sync --extra train --extra graph --extra explain  # GPU 训练机
+#   uv sync --extra all                    # 全部 extras（需 ~3–4 GB 下载 + NVIDIA 驱动 R560+）
+# =============================================================================
+
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[project]
+name = "kite-drp"
+version = "0.1.0"
+description = "Knowledge-Informed Teacher–student for Edge Drug Response Prediction"
+readme = "README.md"
+authors = [
+    { name = "TonyWu1201" },
+    { name = "molbird" },
+]
+# 许可证：尚未最终确定（MIT 或 Apache-2.0，见 README「许可证」与计划书附录 B.2-8）。
+# 发布/开源前必须补 LICENSE 文件并在此声明 SPDX 许可证。
+# license = { text = "MIT" }  # TODO(release): 选定后取消注释并添加 LICENSE
+requires-python = ">=3.12"
+keywords = [
+    "drug response prediction",
+    "knowledge distillation",
+    "oncology",
+    "edge deployment",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+
+# ---------------------------------------------------------------------------
+# 核心依赖：Windows 与 Linux 均有 cp312 wheel，CI 与无 GPU 的纯数据开发都用它。
+# 版本用 >= 下界表达兼容范围，精确版本由 uv.lock 锁定（uv lock --check 校验）。
+# ---------------------------------------------------------------------------
+dependencies = [
+    "numpy>=1.26",
+    "pandas>=2.2",
+    "scipy>=1.13",
+    "scikit-learn>=1.5",
+    "xgboost>=3.0",        # 经典 ML 基线（计划书 §7.3）
+    "pyarrow>=17.0",       # parquet 中间产物（§3.8 processed 缓存）
+    "pyyaml>=6.0",
+    "hydra-core>=1.3",     # 配置驱动（§B.2-1）
+    "omegaconf>=2.3",
+    "tqdm>=4.66",
+    "rich>=13.7",          # CLI 输出（kite-drp doctor 等）
+    "matplotlib>=3.9",
+    "seaborn>=0.13",
+    "optuna>=4.0",         # 调参（§4.5，≤50 trials）
+]
+
+# ---------------------------------------------------------------------------
+# 可选依赖（extras）——GPU 相关组受 CUDA 12.6 约束，torch 由工具 uv.sources 钉到
+# download.pytorch.org/whl/cu126，绝不要从 PyPI 默认索引装 torch（默认是 CPU 或别的 CUDA 版本）。
+# ---------------------------------------------------------------------------
+[project.optional-dependencies]
+# 训练：单卡 3090 / 4060 Ti（计划书 §13.4）
+train = [
+    "torch==2.14.1",
+]
+# 教师图模型：PyG + RDKit 分子图/指纹（计划书 §4.4、§13.3）
+graph = [
+    "torch==2.14.1",
+    "torch-geometric==2.8.1",
+    "rdkit>=2026.9",
+]
+# 可解释性：Captum IG / SHAP / ssGSEA（计划书 §4.6、§5.7）
+explain = [
+    "torch==2.14.1",
+    "captum>=0.9",
+    "shap>=0.54",
+    "gseapy>=1.3",
+]
+# 导出与端侧推理：ONNX + onnxruntime，量化走 onnxruntime.quantization（计划书 §9.2）
+# 该组在无 GPU 机器上可直接使用（导出阶段只需已训练权重）。
+deploy = [
+    "onnx>=1.23",
+    "onnxruntime>=1.32",
+]
+# 临床验证：生存分析（计划书 §8.4 L2'）
+clinical = [
+    "lifelines>=0.30",
+    "scikit-survival>=0.28",
+]
+# 组合 extra：一条命令装齐全部 GPU/部署/临床依赖（等价于上面 5 个 extra 的并集）。
+# 注意：会下载 ~3–4 GB 的 cu126 torch 与 CUDA 运行库，纯 CPU 机器请勿使用。
+all = [
+    "torch==2.14.1",
+    "torch-geometric==2.8.1",
+    "rdkit>=2026.9",
+    "captum>=0.9",
+    "shap>=0.54",
+    "gseapy>=1.3",
+    "onnx>=1.23",
+    "onnxruntime>=1.32",
+    "lifelines>=0.30",
+    "scikit-survival>=0.28",
+]
+
+[project.scripts]
+kite-drp = "kite_drp.cli:main"
+
+# ---------------------------------------------------------------------------
+# 开发依赖组：uv sync / uv run 默认安装该组（见 [tool.uv].default-groups）
+# ---------------------------------------------------------------------------
+[dependency-groups]
+dev = [
+    "pytest>=8.3",
+    "pytest-cov>=6.0",
+    "ruff>=0.17",
+    "mypy>=1.14",
+    "pre-commit>=4.1",
+    "ipykernel>=6.29",   # 探索性分析 notebook（不参与训练/CI）
+]
+
+# ---------------------------------------------------------------------------
+# hatchling 打包：src 布局，只打包 src/kite_drp
+# ---------------------------------------------------------------------------
+[tool.hatch.build.targets.wheel]
+packages = ["src/kite_drp"]
+
+# =============================================================================
+# uv 项目配置
+# =============================================================================
+[tool.uv]
+# 默认安装 dev 依赖组（pytest/ruff/mypy/pre-commit），CI 与本地一致
+default-groups = ["dev"]
+
+# 只解析 Linux 与 Windows 两个平台。
+# 原因：PyTorch cu126 只发布 Linux (manylinux_2_28) 与 Windows (win_amd64) wheel，
+# 把 macOS 纳入解析会直接失败；项目也不支持 macOS 训练/导出机（ADR 0002）。
+environments = [
+    "sys_platform == 'linux'",
+    "sys_platform == 'win32'",
+]
+
+# 默认索引显式钉到 PyPI 官方源（default = true）：
+#   - 保证本地、CI（GitHub Actions）、其他机器都用同一个索引解析，uv.lock 里的
+#     registry 记录（https://pypi.org/simple）与所有人一致，`uv lock --check` 不会
+#     因为某台机器全局配置了镜像而误判锁文件过期；
+#   - 国内镜像需求见 docs/environment.md「国内镜像」一节（用 UV_DEFAULT_INDEX 覆盖，
+#     覆盖后索引与 lock 不一致，需要本地 uv lock 但不要提交该 lock）。
+[[tool.uv.index]]
+name = "pypi"
+url = "https://pypi.org/simple"
+default = true
+
+# 可选依赖 torch 的专用索引：pytorch-cu126
+[[tool.uv.index]]
+name = "pytorch-cu126"
+url = "https://download.pytorch.org/whl/cu126"
+# explicit = true：该索引只用于下方 [tool.uv.sources] 显式点名的包（torch），
+# 其余所有包仍从 PyPI 解析，避免这个索引"截胡"其他同名包。
+explicit = true
+
+# 把 torch 固定到 cu126 索引：
+#   - 索引里的 wheel 版本形如 2.14.1+cu126，`==2.14.1` 按 PEP 440 可匹配本地版本标签；
+#   - uv 0.12 的项目接口没有 --torch-backend，显式 index + sources 是官方推荐做法：
+#     https://docs.astral.sh/uv/guides/integration/pytorch/
+[tool.uv.sources]
+torch = [{ index = "pytorch-cu126" }]
+
+# =============================================================================
+# 代码质量工具配置
+# =============================================================================
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+src = ["src", "tests", "scripts"]
+# .cache：uv 缓存（本仓库沙箱模式把缓存放在仓库内，正常开发在 ~/.cache/uv）
+# deploy：独立的 uv 子项目（deploy/server 有自己的 pyproject 与工具链）
+extend-exclude = [
+    ".cache",
+    ".venv",
+    "build",
+    "dist",
+    "data",
+    "deploy",
+    "experiments",
+    "checkpoints",
+]
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle
+    "W",   # pycodestyle warnings
+    "F",   # pyflakes
+    "I",   # isort
+    "B",   # bugbear
+    "UP",  # pyupgrade
+    "SIM", # simplify
+    "C4",  # comprehensions
+]
+
+[tool.ruff.lint.isort]
+known-first-party = ["kite_drp"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+line-ending = "lf"
+docstring-code-format = true
+
+[tool.mypy]
+python_version = "3.12"
+warn_unused_configs = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+no_implicit_optional = true
+check_untyped_defs = true
+exclude = [
+    "^deploy/",
+    "^\\.cache/",
+    "^data/",
+    "^experiments/",
+    "^checkpoints/",
+]
+
+# 可选依赖（torch/rdkit/onnxruntime 等）在无 GPU / CI 环境不安装，
+# 这些第三方库也普遍缺少完整类型标注；在 per-module 层放宽，避免 mypy 噪音。
+[[tool.mypy.overrides]]
+module = [
+    "torch",
+    "torch.*",
+    "torch_geometric",
+    "torch_geometric.*",
+    "rdkit",
+    "rdkit.*",
+    "captum",
+    "captum.*",
+    "shap",
+    "shap.*",
+    "gseapy",
+    "gseapy.*",
+    "lifelines",
+    "lifelines.*",
+    "sksurv",
+    "sksurv.*",
+    "onnx",
+    "onnx.*",
+    "onnxruntime",
+    "onnxruntime.*",
+    "hydra",
+    "hydra.*",
+    "omegaconf",
+    "omegaconf.*",
+    "xgboost",
+    "xgboost.*",
+    "optuna",
+    "optuna.*",
+]
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+# CI 与本地统一入口：uv run pytest
+testpaths = ["tests"]
+addopts = "-q --strict-markers"
+# 严格 markers：新增 marker 必须先在此登记，避免拼写错误导致静默跳过
+markers = [
+    "slow: 慢测试（分钟级以上）",
+    "gpu: 需要 NVIDIA CUDA GPU（无 GPU 机器上跳过）",
+    "network: 需要访问外网（CI 默认不跑）",
+    "integration: 集成测试（依赖真实数据/权重，默认不跑）",
+]
+
+[tool.coverage.run]
+source = ["src/kite_drp"]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = true
