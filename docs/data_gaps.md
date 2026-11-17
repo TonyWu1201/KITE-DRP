@@ -34,7 +34,7 @@
 | **ChEMBL v36**（mechanisms / drug indications） | 药名桥接、DTI 补充、SMILES 兜底 | https://ftp.ebi.ac.uk/pub/databases/chembl/ChEMBLdb/latest/ （CC BY-SA **3.0**） | ✅ 已抓取 **ChEMBL 37** mechanism（7,561 行）与 drug_indication；新增 242 条机制边；v36 未落盘，版本差异见 manifest |
 | **GDSC1** 标签 | P5 外部验证：GDSC2 训练 → GDSC1 零样本 | https://www.cancerrxgene.org/downloads/bulk_download | ✅ 已下载 release 8.5 / 27Oct23（CancerRxGene 已 410，改用 Sanger COG 镜像）；外部验证主项；不混训 |
 | **CTRPv2** | P5 外部验证（AUC） | https://portals.broadinstitute.org/ctrp/ | ✅ 已下载 v21 AUC（Zenodo 处理版；原 NCI/Broad 直链已下线） |
-| **PRISM** | P5 外部验证（LFC/AUC，非 IC50） | https://depmap.org/repurposing/ | ✅ 已下载 secondary-screen dose-response 参数（含 AUC/IC50/EC50）；需转换为排序/二分类 |
+| **PRISM** | P5 外部验证（LFC/AUC，非 IC50） | https://depmap.org/repurposing/ | ✅ 已下载并预处理 AUC（701,004 行）+ LFC long（6,360,912 行）；主评估用 AUC/排序 |
 
 #### P1 补数结果（2026-11-17）
 
