@@ -129,6 +129,7 @@ git lfs ls-files     # 查看 LFS 跟踪文件
 ```
 
 数据卡与许可见 [`docs/data_cards/`](docs/data_cards/)、[`data/licenses/`](data/licenses/)；
+数据缺口与补数据顺序见 [`docs/data_gaps.md`](docs/data_gaps.md)；
 **公开 release 不打包受限数据**（TCGA 受控层、DrugBank 等），只提供下载脚本与派生特征。
 
 ### 数据管线（G0）

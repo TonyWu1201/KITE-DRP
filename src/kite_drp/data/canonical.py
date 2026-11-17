@@ -488,6 +488,15 @@ def build_canonical(
         "id_conflicts.json",
         "dti.parquet",
         "mut_burden.parquet",
+        "tcga_mu.npz",
+        "tcga_mu_B.npz",
+        "tcga_ge.npz",
+        "tcga_cnv.npz",
+        "tcga_meth_stats.parquet",
+        "tcga_clinical.parquet",
+        "tcga_treatments.parquet",
+        "tcga_cdr_cesc.parquet",
+        "tcga_ding2016.parquet",
     ]:
         candidate = paths.canonical / extra
         if candidate.is_file():
@@ -548,6 +557,15 @@ def _build_tcga_offline(
             tcga_module.write_tcga_omics(cnv, paths.interim / "canonical" / "tcga_cnv.npz")
         stats["ge"] = ge.info
         stats["cnv"] = cnv.info
+        meth_stats = tcga_module.build_tcga_meth_stats(cesc_dir, file_index)
+        if not meth_stats.empty:
+            io.write_parquet(
+                meth_stats, paths.interim / "canonical" / "tcga_meth_stats.parquet"
+            )
+            stats["meth_stats"] = {
+                "n_files": int(len(meth_stats)),
+                "missing_fraction_median": float(meth_stats["missing_fraction"].median()),
+            }
     clinical_path = next((tcga_root / "clinical").glob("*.tar.gz"), None)
     if clinical_path:
         clinical, treatments, info = tcga_module.build_tcga_clinical(clinical_path)
