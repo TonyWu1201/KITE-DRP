@@ -1,0 +1,17 @@
+# @package data.external.gdsc1
+library: gdsc1
+role: external_validation
+raw_files:
+  labels: data/raw/gdsc/GDSC1_fitted_dose_response_27Oct23.csv
+  compounds: data/raw/gdsc/screened_compounds_rel_8.5_inchi.csv
+label:
+  column: ln_ic50
+  sensitivity_score: "-ln_ic50"
+  direction: higher_ln_ic50_more_resistant
+matching:
+  cell_line: sanger_model_id_then_name
+  compound: inchikey_then_name
+evaluation:
+  mode: zero_shot_gdsc2_to_gdsc1
+  compounds: gdsc2_overlap_only
+  no_training: true

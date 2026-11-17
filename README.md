@@ -145,6 +145,10 @@ uv sync --extra data --extra graph
 .venv/bin/python scripts/download_pathways.py
 .venv/bin/python scripts/download_mutation_panel.py
 
+# P1 外部验证库（GDSC1 / CTRPv2 / PRISM）与 DTI 补充（Open Targets / ChEMBL）
+.venv/bin/python scripts/download_p1_external.py --only all
+.venv/bin/python -m kite_drp data external
+
 # TCGA file→case（联网一次；之后冻结）
 .venv/bin/python -m kite_drp data canonical --only tcga --fetch-file-index
 

@@ -1,0 +1,17 @@
+# @package data.external.ctrpv2
+library: ctrpv2
+role: external_validation
+raw_files:
+  auc: data/raw/ctrp/v21_auc_sensitivities.tsv
+  treatment: data/raw/ctrp/treatment.tsv
+  sample: data/raw/ctrp/sample.tsv
+label:
+  column: auc
+  sensitivity_score: "-auc"
+  direction: higher_auc_more_resistant
+matching:
+  cell_line: normalized_name
+  compound: smiles_inchikey_then_name
+evaluation:
+  mode: external_cell_line_generalization
+  no_training: true

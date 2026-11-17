@@ -47,6 +47,8 @@ def build_report(paths: DataPaths | None = None) -> Path:
     route = io.read_json(route_path) if route_path.is_file() else {}
     tcga_index_path = paths.processed / "tcga_inputs" / "index.json"
     tcga_index = io.read_json(tcga_index_path) if tcga_index_path.is_file() else {}
+    external_path = paths.interim / "external" / "external_manifest.json"
+    external = io.read_json(external_path) if external_path.is_file() else {}
 
     lines: list[str] = []
     lines.append("# KITE-DRP 数据质量报告")
@@ -109,7 +111,15 @@ def build_report(paths: DataPaths | None = None) -> Path:
     lines.append("## 4. 药物特征覆盖")
     lines.append("")
     if drug_cov:
-        for key in ("n_compounds", "has_inchikey", "has_target", "has_smiles", "has_scaffold"):
+        for key in (
+            "n_compounds",
+            "has_inchikey",
+            "has_target",
+            "has_gdsc_target",
+            "has_dti",
+            "has_smiles",
+            "has_scaffold",
+        ):
             lines.append(f"- {key}: {drug_cov.get(key)}")
         lines.append(f"- RDKit: {drug_cov.get('rdkit_available')}")
     lines.append("")
@@ -123,7 +133,24 @@ def build_report(paths: DataPaths | None = None) -> Path:
     if tcga_index:
         lines.append(f"- TCGA 评估交集：{tcga_index.get('n_patients')} 例（GE+CNV+MU）")
     lines.append("")
-    lines.append("## 6. naive 基线（G0-9）")
+    if external.get("libraries"):
+        lines.append("## 6. 外部验证库（P5，仅评估）")
+        lines.append("")
+        lines.append("| 库 | 行 | 细胞系 | ∩主池 | 化合物 | ∩GDSC2 | 交集行 |")
+        lines.append("|---|---:|---:|---:|---:|---:|---:|")
+        for name, info in external["libraries"].items():
+            lines.append(
+                f"| {name} | {info.get('rows', info.get('rows_compound_level', 0))} | "
+                f"{info.get('cells', info.get('cells_mapped', 0))} | "
+                f"{info.get('cells_in_main_pool', 0)} | "
+                f"{info.get('compounds', 0)} | "
+                f"{info.get('compounds_in_gdsc2', 0)} | "
+                f"{info.get('rows_in_gdsc2_compounds', 0)} |"
+            )
+        lines.append("")
+        lines.append("## 7. naive 基线（G0-9）")
+    else:
+        lines.append("## 6. naive 基线（G0-9）")
     lines.append("")
     baseline_dir = REPO_ROOT / "experiments" / "data_baselines"
     baseline_files = sorted(baseline_dir.glob("naive_*.json")) if baseline_dir.is_dir() else []
@@ -144,7 +171,8 @@ def build_report(paths: DataPaths | None = None) -> Path:
     else:
         lines.append("- 尚未运行（`kite-drp eval naive --split p1_lco_s0`）。")
     lines.append("")
-    lines.append("## 7. 降级与缺口")
+    next_section = 8 if external.get("libraries") else 7
+    lines.append(f"## {next_section}. 降级与缺口")
     lines.append("")
     warnings = payload.get("warnings", stats.get("warnings", []))
     if warnings:
@@ -153,7 +181,7 @@ def build_report(paths: DataPaths | None = None) -> Path:
     else:
         lines.append("- 无")
     lines.append("")
-    lines.append("## 8. 与计划书对照")
+    lines.append(f"## {next_section + 1}. 与计划书对照")
     lines.append("")
     lines.append("| 项 | 规划/审计值 | 本次实测 |")
     lines.append("|---|---|---|")
@@ -170,7 +198,7 @@ def build_report(paths: DataPaths | None = None) -> Path:
             "删除后有效基因 18,613（规划按 19,144 估计）；以构建脚本 manifest 为准。"
         )
         lines.append("")
-    lines.append("## 9. 复现命令")
+    lines.append(f"## {next_section + 2}. 复现命令")
     lines.append("")
     lines.append("```bash")
     lines.append(".venv/bin/python -m kite_drp data pipeline --profile core")

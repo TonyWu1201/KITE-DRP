@@ -4,12 +4,10 @@ from __future__ import annotations
 
 import argparse
 import json
-import sys
 import traceback
 from pathlib import Path
 from typing import Any
 
-from kite_drp.common.paths import REPO_ROOT
 from kite_drp.data import io, registry
 from kite_drp.data.config import DataPaths, load_data_config
 from kite_drp.data.manifest import code_hash, config_hash
@@ -17,7 +15,6 @@ from kite_drp.data.splits import (
     PROTOCOLS,
     load_split,
     make_split,
-    split_path,
     validate_split,
     write_split,
     write_split_manifest,
@@ -45,7 +42,14 @@ def cmd_inventory(args: argparse.Namespace) -> int:
     out = Path(args.out) if args.out else paths.audit / "inventory.json"
     payload = build_inventory(paths.raw)
     io.write_json(out, payload)
-    return _ok({"status": "ok", "artifact": str(out), "n_files": payload["n_files"], "bytes": payload["total_bytes"]})
+    return _ok(
+        {
+            "status": "ok",
+            "artifact": str(out),
+            "n_files": payload["n_files"],
+            "bytes": payload["total_bytes"],
+        }
+    )
 
 
 def cmd_canonical(args: argparse.Namespace) -> int:
@@ -117,7 +121,9 @@ def cmd_splits(args: argparse.Namespace) -> int:
             )
             for fold in split["folds"]:
                 fold["_seed"] = seed
-            report = validate_split(split, labels=labels, cell_lines=cell_lines, compounds=compounds)
+            report = validate_split(
+                split, labels=labels, cell_lines=cell_lines, compounds=compounds
+            )
             validations[path.name] = report
             written.append(path)
     manifest = write_split_manifest(
@@ -160,7 +166,11 @@ def cmd_fit_stats(args: argparse.Namespace) -> int:
         universe = io.read_json(paths.canonical / "gene_universes.json")
         external_panel = universe.get("panel")
     if args.split:
-        candidates = [Path(args.split)] if Path(args.split).is_file() else sorted(paths.splits.glob(f"{args.split}.json"))
+        candidates = (
+            [Path(args.split)]
+            if Path(args.split).is_file()
+            else sorted(paths.splits.glob(f"{args.split}.json"))
+        )
     else:
         candidates = sorted(paths.splits.glob("*_s*.json"))
     if not candidates:
@@ -217,9 +227,21 @@ def cmd_report(args: argparse.Namespace) -> int:
     return _ok({"status": "ok", "report": str(target)})
 
 
-def cmd_pipeline(args: argparse.Namespace) -> int:
+
+def cmd_external(args: argparse.Namespace) -> int:
+    from kite_drp.data.external import build_external
+
     paths = _paths()
-    config = load_data_config(args.config)
+    manifest = build_external(
+        raw_dir=paths.raw,
+        canonical_dir=paths.canonical,
+        out_dir=paths.interim / "external",
+        splits_dir=paths.splits,
+    )
+    return _ok({"status": "ok", **manifest})
+
+
+def cmd_pipeline(args: argparse.Namespace) -> int:
     steps: list[tuple[str, argparse.Namespace]] = []
     ns = argparse.Namespace(
         config=args.config,
@@ -259,6 +281,8 @@ def cmd_pipeline(args: argparse.Namespace) -> int:
             argparse.Namespace(config=args.config, stage="all"),
         )
     )
+    if args.profile == "full":
+        steps.append(("external", argparse.Namespace()))
     steps.append(("validate", argparse.Namespace(strict=False, no_leakage=False)))
     steps.append(("report", argparse.Namespace()))
     results: dict[str, Any] = {}
@@ -269,6 +293,7 @@ def cmd_pipeline(args: argparse.Namespace) -> int:
             "splits": cmd_splits,
             "fit-stats": cmd_fit_stats,
             "build": cmd_build,
+            "external": cmd_external,
             "validate": cmd_validate,
             "report": cmd_report,
         }[name]
@@ -316,7 +341,11 @@ def register(subparsers: argparse._SubParsersAction) -> None:  # type: ignore[ty
 
     p = data_sub.add_parser("build", help="装配 processed model-input")
     p.add_argument("--config", type=str, default=None)
-    p.add_argument("--stage", choices=["all", "teacher", "drug", "student", "vae", "tcga"], default="all")
+    p.add_argument(
+        "--stage",
+        choices=["all", "teacher", "drug", "student", "vae", "tcga"],
+        default="all",
+    )
     p.set_defaults(func=cmd_build)
 
     p = data_sub.add_parser("validate", help="产物/划分/泄漏校验")
@@ -324,6 +353,9 @@ def register(subparsers: argparse._SubParsersAction) -> None:  # type: ignore[ty
     p.add_argument("--strict", action="store_true")
     p.add_argument("--no-leakage", action="store_true")
     p.set_defaults(func=cmd_validate)
+
+    p = data_sub.add_parser("external", help="构建 P5 外部验证库（GDSC1/CTRPv2/PRISM）")
+    p.set_defaults(func=cmd_external)
 
     p = data_sub.add_parser("report", help="生成质量报告")
     p.set_defaults(func=cmd_report)

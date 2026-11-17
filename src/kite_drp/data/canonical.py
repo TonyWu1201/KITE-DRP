@@ -326,7 +326,6 @@ def build_canonical(
     # 4. 落盘 canonical
     # ------------------------------------------------------------------
     io.write_parquet(cell_lines, paths.canonical / "cell_lines.parquet")
-    io.write_parquet(compounds, paths.canonical / "compounds.parquet")
     io.write_parquet(labels, paths.canonical / "labels.parquet")
     expression_subset = expression_module.ExpressionData(
         frame=expression.frame[sorted(universes["teach_ge"])],
@@ -380,14 +379,65 @@ def build_canonical(
     )
 
     # ------------------------------------------------------------------
-    # 5. 药物特征 / DTI
+    # 5. DTI（GDSC + Open Targets + ChEMBL + DGIdb）→ 药物特征
     # ------------------------------------------------------------------
+    dgidb_path = REPO_ROOT / "data" / "raw" / "dgidb" / "interactions.tsv"
+    opentargets_dir = config.get("raw_files", {}).get(
+        "opentargets_dir", REPO_ROOT / "data" / "raw" / "opentargets" / "26.09"
+    )
+    chembl_dir = config.get("raw_files", {}).get(
+        "chembl_dir", REPO_ROOT / "data" / "raw" / "chembl" / "37"
+    )
+    if dgidb_path.is_file():
+        dti, dti_info = build_dti(
+            compounds,
+            dgidb_path,
+            master,
+            allowed_genes=universes["teach_ge"],
+            opentargets_dir=opentargets_dir,
+            chembl_dir=chembl_dir,
+        )
+        io.write_parquet(dti, paths.canonical / "dti.parquet")
+        result["stats"]["dti"] = dti_info
+        # 把 DTI 靶点并入 compounds，供药物靶点 multi-hot 使用
+        compounds["gdsc_target_genes"] = compounds["target_genes"].map(list)
+        dti_genes: dict[str, set[str]] = {}
+        for row in dti.itertuples(index=False):
+            dti_genes.setdefault(row.compound_uid, set()).add(row.hgnc_symbol)
+        base_genes = dict(zip(compounds["compound_uid"], compounds["target_genes"], strict=False))
+        compounds["target_genes"] = compounds["compound_uid"].map(
+            lambda uid: sorted(set(base_genes.get(uid, [])) | dti_genes.get(uid, set()))
+        )
+        compounds["has_gdsc_target"] = compounds["gdsc_target_genes"].map(len) > 0
+        compounds["has_target"] = compounds["target_genes"].map(len) > 0
+        compounds["has_dti"] = compounds["compound_uid"].isin(dti_genes)
+    else:
+        dti = pd.DataFrame(
+            columns=[
+                "compound_uid",
+                "hgnc_symbol",
+                "source",
+                "score",
+                "action_type",
+                "mechanism",
+                "target_name",
+            ]
+        )
+        io.write_parquet(dti, paths.canonical / "dti.parquet")
+        result["warnings"].append("DGIdb interactions.tsv 缺失，DTI 仅保留 GDSC 靶点文本。")
+
     drug_arrays, drug_coverage = build_drug_features(
         compounds,
         smiles_path=config.get("local_files", {}).get("drug_smiles"),
         target_genes=universes["teach_ge"],
         radius=int(config.get("drug_features", {}).get("morgan", {}).get("radius", 2)),
         bits=int(config.get("drug_features", {}).get("morgan", {}).get("bits", 2048)),
+    )
+    drug_coverage["has_gdsc_target"] = (
+        int(compounds["has_gdsc_target"].sum()) if "has_gdsc_target" in compounds else 0
+    )
+    drug_coverage["has_dti"] = (
+        int(compounds["has_dti"].sum()) if "has_dti" in compounds else 0
     )
     io.write_npz(paths.canonical / "drug_features.npz", drug_arrays)
     io.write_json(paths.canonical / "drug_feature_coverage.json", drug_coverage)
@@ -404,20 +454,6 @@ def build_canonical(
         result["warnings"].append("RDKit 未安装：Morgan FP/分子图/scaffold 降级为空 + mask。")
     if drug_coverage["has_smiles"] == 0:
         result["warnings"].append("SMILES 缺失：P3 scaffold 将降级为 target-family split。")
-
-    dgidb_path = REPO_ROOT / "data" / "raw" / "dgidb" / "interactions.tsv"
-    if dgidb_path.is_file():
-        dti, dti_info = build_dti(
-            compounds, dgidb_path, master, allowed_genes=universes["teach_ge"]
-        )
-        io.write_parquet(dti, paths.canonical / "dti.parquet")
-        result["stats"]["dti"] = dti_info
-    else:
-        io.write_parquet(
-            pd.DataFrame(columns=["compound_uid", "hgnc_symbol", "source", "score"]),
-            paths.canonical / "dti.parquet",
-        )
-        result["warnings"].append("DGIdb interactions.tsv 缺失，DTI 降级为仅 GDSC targets。")
 
     # ------------------------------------------------------------------
     # 6. TCGA（离线可用部分）

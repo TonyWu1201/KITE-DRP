@@ -9,6 +9,8 @@
 | [`download_smiles_pubchem.py`](download_smiles_pubchem.py) | 跨平台 | 用 pubchempy 从 PubChem 下载 GDSC 化合物 SMILES（可续传/限速） |
 | [`download_pathways.py`](download_pathways.py) | 跨平台 | 下载 Reactome GMT + GO GAF/OBO，转换为 GMT |
 | [`download_mutation_panel.py`](download_mutation_panel.py) | 跨平台 | 从 cBioPortal API 下载 MSK-IMPACT panel 基因清单 |
+| [`download_p1_external.py`](download_p1_external.py) | Linux/macOS | 下载 P1：Open Targets / ChEMBL / GDSC1 / CTRPv2 / PRISM（断点续传 + manifest） |
+| [`download_p1_external.py`](download_p1_external.py) | 跨平台 | 下载 P1 外部数据：Open Targets / ChEMBL / GDSC1 / CTRPv2 / PRISM（可续传/校验/写 manifest） |
 | [`nightly_data_check.sh`](nightly_data_check.sh) | Linux（bash） | 夜间全量校验 + pytest + 质量报告 |
 
 ## 环境自检
@@ -26,6 +28,7 @@ uv sync --extra graph                               # rdkit/torch-geometric（FP
 .venv/bin/python scripts/download_smiles_pubchem.py # → data/raw/drugs/smiles.tsv
 .venv/bin/python scripts/download_pathways.py       # → Reactome/GO GMT
 .venv/bin/python scripts/download_mutation_panel.py # → MSK-IMPACT 468
+.venv/bin/python scripts/download_p1_external.py    # → Open Targets/ChEMBL/GDSC1/CTRPv2/PRISM
 bash scripts/preprocess_all.sh --profile core       # 离线全量重建
 bash scripts/preprocess_all.sh --profile full       # 额外尝试 GDC file index
 bash scripts/nightly_data_check.sh                  # validate --strict + pytest + report

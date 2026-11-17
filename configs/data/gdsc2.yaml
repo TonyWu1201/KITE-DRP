@@ -54,7 +54,7 @@ drug_features:
   smiles_source: pubchem_then_chembl
   morgan: {radius: 2, bits: 2048}
   graph: {atom_features: ogb_77}
-  targets: {sources: [gdsc_target, opentargets, dgidb]}
+  targets: {sources: [gdsc_target, opentargets, chembl, dgidb]}
 
 priors:
   ppi:
@@ -88,6 +88,8 @@ raw_files:
   string_links: data/raw/string/9606.protein.links.v12.5.txt.gz
   string_aliases: data/raw/string/9606.protein.aliases.v12.5.txt.gz
   dgidb_interactions: data/raw/dgidb/interactions.tsv
+  opentargets_dir: data/raw/opentargets/26.09
+  chembl_dir: data/raw/chembl/37
   ccle_methylation: data/raw/ccle/CCLE_DNA_methylation_TSS1kb.txt
   tcga_file_index: data/interim/tcga/file_index.parquet
   # 可选：外部 panel 清单（纯文本/CSV，每行一个基因）

@@ -14,6 +14,8 @@
 | `drug_smiles_pubchem.md` | GDSC 药物结构（SMILES，PubChem） | 药物图/FP/scaffold | 已生成，286/286 覆盖 |
 | `pathways_reactome_go.md` | Reactome / GO 通路基因集 | 学生通路分数/教师解释 | 已生成，1,000 通路 |
 | `mutation_panel_msk_impact.md` | MSK-IMPACT 468 panel | 学生突变输入 | 已生成，469 symbol / 462 交集 |
+| `opentargets_chembl.md` | Open Targets / ChEMBL | DTI/机制 | 已生成，237/286 化合物有 DTI |
+| `external_validation.md` | GDSC1 / CTRPv2 / PRISM | P5 外部验证 | 已预处理，只评估 |
 | `tcga_cesc.md` | TCGA-CESC 四模态 | L1/L2/L2′/L3（评估域） | 离线部分已核实；file→case 映射待建表（D29） |
 | `ding2016.md` | Ding 2016 响应标签 | L2 弱标签唯一来源 | 已核实；仅 Cisplatin-CESC n=59 |
 | 待补 | CTRPv2 / PRISM / GDSC1 | 外部验证（D12） | 未下载 |

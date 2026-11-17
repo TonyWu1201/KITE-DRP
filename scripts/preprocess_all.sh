@@ -33,29 +33,34 @@ if [[ ! -x "$PYTHON" ]]; then
   exit 2
 fi
 
-echo "[1/7] inventory"
+echo "[1/8] inventory"
 "$PYTHON" -m kite_drp data inventory
 
-echo "[2/7] canonical"
+echo "[2/8] canonical"
 if [[ "$PROFILE" == "full" && -z "$SKIP_ONLINE" ]]; then
   "$PYTHON" -m kite_drp data canonical --fetch-file-index $FORCE
 else
   "$PYTHON" -m kite_drp data canonical $FORCE
 fi
 
-echo "[3/7] splits"
+echo "[3/8] splits"
 "$PYTHON" -m kite_drp data splits --all --seeds 0,1,2
 
-echo "[4/7] fit-stats"
+echo "[4/8] fit-stats"
 "$PYTHON" -m kite_drp data fit-stats $FORCE
 
-echo "[5/7] build"
+echo "[5/8] build"
 "$PYTHON" -m kite_drp data build --stage all
 
-echo "[6/7] validate"
+if [[ "$PROFILE" == "full" ]]; then
+  echo "[6/8] external validation"
+  "$PYTHON" -m kite_drp data external
+fi
+
+echo "[7/8] validate"
 "$PYTHON" -m kite_drp data validate --all
 
-echo "[7/7] report"
+echo "[8/8] report"
 "$PYTHON" -m kite_drp data report
 
 echo "完成。质量报告：data/interim/audit/quality_report.md"
