@@ -124,6 +124,13 @@ def make_split(
             group_key = "target_family" if degraded else "scaffold"
             if degraded:
                 notes.append("SMILES/scaffold unavailable or incomplete: P3 degraded to target-family split")
+            else:
+                missing = int(compounds["scaffold"].isna().sum()) if "scaffold" in compounds else 0
+                if missing:
+                    notes.append(
+                        f"{missing} compounds have no Bemis-Murcko scaffold; "
+                        "assigned singleton target/compound groups"
+                    )
         else:
             groups_series = pd.Series(compounds["compound_uid"].to_numpy(), index=compounds["compound_uid"])
             group_key = "compound_uid"
@@ -140,21 +147,32 @@ def make_split(
             test_groups = groups[k]
             val_groups = groups[(k + 1) % n_folds]
             train_groups = [group for j, fold in enumerate(groups) if j not in {k, (k + 1) % n_folds} for group in fold]
+            train_compounds = sorted(
+                compound for group in train_groups for compound in group_to_compounds.get(group, [])
+            )
+            val_compounds = sorted(
+                compound for group in val_groups for compound in group_to_compounds.get(group, [])
+            )
+            test_compounds = sorted(
+                compound for group in test_groups for compound in group_to_compounds.get(group, [])
+            )
             train = sorted(pools[pools["_group"].isin(train_groups)]["cell_line_uid"].unique().tolist())
             val = sorted(pools[pools["_group"].isin(val_groups)]["cell_line_uid"].unique().tolist())
             test = sorted(pools[pools["_group"].isin(test_groups)]["cell_line_uid"].unique().tolist())
-            folds.append(
-                _fold_doc(
-                    k,
-                    train_groups=train_groups,
-                    val_groups=val_groups,
-                    test_groups=test_groups,
-                    train=train,
-                    val=val,
-                    test=test,
-                    stats=_fold_stats(pools, train, val, test, level="compound", groups=(train_groups, val_groups, test_groups)),
-                )
+            fold_doc = _fold_doc(
+                k,
+                train_groups=train_groups,
+                val_groups=val_groups,
+                test_groups=test_groups,
+                train=train,
+                val=val,
+                test=test,
+                stats=_fold_stats(pools, train, val, test, level="compound", groups=(train_groups, val_groups, test_groups)),
             )
+            fold_doc["train_compounds"] = train_compounds
+            fold_doc["val_compounds"] = val_compounds
+            fold_doc["test_compounds"] = test_compounds
+            folds.append(fold_doc)
         level = "compound"
 
     elif protocol == LINEAGE_PROTOCOL:
@@ -365,6 +383,12 @@ def fold_masks(fold: dict[str, Any], labels: pd.DataFrame, protocol: str) -> dic
             "test": labels["cell_line_uid"].isin(fold["test"]) & mapped,
         }
     if protocol in COMPOUND_PROTOCOLS:
+        if "train_compounds" in fold:
+            return {
+                "train": labels["compound_uid"].isin(fold["train_compounds"]) & mapped,
+                "val": labels["compound_uid"].isin(fold["val_compounds"]) & mapped,
+                "test": labels["compound_uid"].isin(fold["test_compounds"]) & mapped,
+            }
         return {
             "train": labels["compound_uid"].isin(fold["train_groups"]) & mapped,
             "val": labels["compound_uid"].isin(fold["val_groups"]) & mapped,
@@ -440,7 +464,11 @@ def validate_split(
                     "n_train": len(train),
                     "n_val": len(val),
                     "n_test": len(test),
-                    "n_test_labels": int(labels["compound_uid"].isin(test).sum()),
+                    "n_test_labels": int(
+                        labels["compound_uid"].isin(
+                            fold.get("test_compounds", fold.get("test_groups", []))
+                        ).sum()
+                    ),
                 }
             )
         checks["no_group_overlap"] = all(

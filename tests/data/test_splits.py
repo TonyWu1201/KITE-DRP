@@ -102,3 +102,19 @@ def test_scaffold_protocol_degrades_without_smiles() -> None:
     assert split["degraded"] is True
     assert split["group_key"] == "target_family"
     assert split["notes"]
+
+
+def test_scaffold_protocol_uses_scaffold_groups_and_compound_masks() -> None:
+    labels, cell_lines, compounds = _fixtures()
+    compounds = compounds.copy()
+    compounds["scaffold"] = ["c1ccccc1", "c1ccccc1", "C1CCCCC1", "C1CCCCC1", None, None]
+    split = make_split("p3_scaffold", labels=labels, cell_lines=cell_lines, compounds=compounds, seed=0)
+    assert split["degraded"] is False
+    assert split["group_key"] == "scaffold"
+    fold = split["folds"][0]
+    assert fold["test_compounds"]
+    local = dict(fold)
+    local["_seed"] = 0
+    masks = fold_masks(local, labels, "p3_scaffold")
+    test_labels = labels.loc[masks["test"], "compound_uid"].unique().tolist()
+    assert sorted(test_labels) == sorted(fold["test_compounds"])

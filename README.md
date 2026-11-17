@@ -136,7 +136,11 @@ git lfs ls-files     # 查看 LFS 跟踪文件
 原始数据就位后，用统一 CLI 重建 canonical → splits → fit_stats → processed：
 
 ```bash
-# 一键（离线 core profile；SMILES/通路/TCGA 映射缺失时自动降级并写报告）
+# 药物结构（可选，但 scaffold/P3 需要）：PubChem → data/raw/drugs/smiles.tsv
+uv sync --extra data --extra graph
+.venv/bin/python scripts/download_smiles_pubchem.py
+
+# 一键（离线 core profile；缺失资源自动降级并写报告）
 .venv/bin/python -m kite_drp data pipeline --profile core
 
 # 分步

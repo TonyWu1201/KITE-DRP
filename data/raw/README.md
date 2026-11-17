@@ -39,6 +39,10 @@ data/raw/
 │   ├── drugs.tsv
 │   ├── genes.tsv
 │   └── categories.tsv
+├── drugs/                          ← PubChem 下载的 GDSC 化合物 SMILES（2026-11-17）
+│   ├── smiles.tsv
+│   ├── smiles.parquet
+│   └── smiles_manifest.json
 └── tcga/                           ← TCGA（当前只有 CESC；BRCA/LUAD 未下载）
     ├── CESC/                       ← GDC processed 四模态原始下载（1,204 个 parcel 目录）
     ├── clinical/                   ← GDC Portal 临床导出（CESC，tar.gz）
@@ -71,6 +75,7 @@ data/raw/
 | string | `9606.protein.aliases.v12.0.txt` | 199.7 MB | v12.0 | 旧版本留档/对照 | CC BY 4.0 |
 | dgidb | `interactions.tsv` | 19.3 MB | DGIdb v5.0.13，data 2026-10；122,905 条 claim | E11 解释命中率校验 + A_DG 兜底（§4.6） | DGIdb（混合来源，再分发受限，内部研究用） |
 | dgidb | `drugs.tsv` / `genes.tsv` / `categories.tsv` | 14.7 MB | 同上（80,483 / 85,738 / 33,890 行） | 药/基因/类别映射 | 同上 |
+| drugs | `smiles.tsv` / `smiles.parquet` | ~80 KB | PubChem 2026-11-17；286/286 化合物 | 药物图/Morgan FP/scaffold（§4.7） | PubChem 公共数据；再分发前核对 NCBI 条款 |
 | tcga | `CESC/`（1,204 文件） | 6.421 GB | GDC Data Release 46.0；ascat3-only CNV | L1/L2/L3（§3.7、§8） | GDC 开放层（NIH open access） |
 | tcga | `clinical/clinical.project-tcga-cesc.2026-11-11.tar.gz` | 363 KB | GDC Portal 2026-11-11 导出；202 列、1,454 行/307 例 | L2 治疗记录/L2′ 协变量（§8.4） | GDC 开放层 |
 | tcga | `cdr/TCGA-CDR-SupplementalTableS1.xlsx` | 2.9 MB | PanCan-Clinical-2018；11,160 例/33 癌种 | L2′ 生存终点（OS/PFI/DFI/DSS） | 引用 Liu et al. 2018 |

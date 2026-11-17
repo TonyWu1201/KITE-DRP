@@ -155,6 +155,7 @@ def validate_splits(paths: DataPaths) -> dict[str, Any]:
             if not value:
                 errors.append(f"{path.name}:{key} 校验失败")
         notes.extend(f"{path.name}: {message}" for message in report["warnings"])
+        notes.extend(f"{path.name}: {message}" for message in split.get("notes", []))
     checks["split_validation"] = not errors
     return {"checks": checks, "errors": errors, "warnings": warnings, "notes": notes, "summaries": summaries}
 

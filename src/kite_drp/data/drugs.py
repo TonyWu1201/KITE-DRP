@@ -112,9 +112,17 @@ def targets_matrix(
 
 
 def compound_split_groups(compounds: pd.DataFrame) -> tuple[pd.Series, bool]:
-    """P3 分组：优先 scaffold，其次 target family，最后化合物本身。"""
+    """P3 分组：优先 scaffold；完全缺失才降级 target-family/compound。"""
+    scaffolds = [
+        value
+        for value in compounds.get("scaffold", pd.Series(dtype=object)).tolist()
+        if isinstance(value, str) and value
+    ]
+    if not scaffolds:
+        degraded = True
+    else:
+        degraded = False
     groups = []
-    degraded = False
     for row in compounds.itertuples(index=False):
         scaffold = getattr(row, "scaffold", None)
         targets = getattr(row, "target_genes", [])
@@ -122,10 +130,8 @@ def compound_split_groups(compounds: pd.DataFrame) -> tuple[pd.Series, bool]:
             groups.append(f"scaffold:{scaffold}")
         elif len(targets) > 0:
             groups.append(f"target:{sorted(targets)[0]}")
-            degraded = True
         else:
             groups.append(f"compound:{row.compound_uid}")
-            degraded = True
     return pd.Series(groups, index=compounds.index), degraded
 
 

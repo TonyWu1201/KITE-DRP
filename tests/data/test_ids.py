@@ -134,6 +134,22 @@ def test_compound_split_groups_degrades_without_scaffold() -> None:
     assert groups.tolist()[2].startswith("compound:")
 
 
+def test_compound_split_groups_uses_scaffold_when_available() -> None:
+    from kite_drp.data.drugs import compound_split_groups
+
+    compounds = pd.DataFrame(
+        {
+            "compound_uid": ["a", "b", "c"],
+            "scaffold": ["c1ccccc1", "c1ccccc1", None],
+            "target_genes": [["EGFR"], ["EGFR"], ["TP53"]],
+        }
+    )
+    groups, degraded = compound_split_groups(compounds)
+    assert degraded is False
+    assert groups.tolist()[0] == groups.tolist()[1] == "scaffold:c1ccccc1"
+    assert groups.tolist()[2] == "target:TP53"
+
+
 def test_cell_line_source_group_does_not_collapse_missing_cosmic(tmp_path) -> None:
     path = tmp_path / "Model.csv"
     _model_frame().to_csv(path, index=False)
