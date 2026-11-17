@@ -99,6 +99,12 @@ ARTIFACTS: dict[str, ArtifactSpec] = {
     "teacher_inputs": ArtifactSpec(
         "teacher_inputs", "data/processed/teacher_inputs.npz", "processed", "data.assembly"
     ),
+    "drug_features_processed": ArtifactSpec(
+        "drug_features_processed", "data/processed/drug_features.npz", "processed", "data.assembly"
+    ),
+    "compounds_processed": ArtifactSpec(
+        "compounds_processed", "data/processed/compounds.parquet", "processed", "data.assembly"
+    ),
     "teacher_index": ArtifactSpec(
         "teacher_index", "data/processed/teacher_index.json", "processed", "data.assembly"
     ),

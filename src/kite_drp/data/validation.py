@@ -98,11 +98,14 @@ def validate_canonical(paths: DataPaths) -> dict[str, Any]:
 
 def validate_processed(paths: DataPaths) -> dict[str, Any]:
     errors: list[str] = []
+    warnings: list[str] = []
     checks: dict[str, bool] = {}
     required = {
         "teacher_inputs": paths.processed / "teacher_inputs.npz",
         "teacher_index": paths.processed / "teacher_index.json",
         "pool_index": paths.processed / "pool_index.json",
+        "drug_features": paths.processed / "drug_features.npz",
+        "compounds": paths.processed / "compounds.parquet",
         "panel_mutations": paths.processed / "student_inputs" / "panel_mutations_A.npz",
         "mut_burden": paths.processed / "student_inputs" / "mut_burden.parquet",
         "vae_target_cnv": paths.processed / "vae_target_cnv.parquet",
@@ -126,10 +129,16 @@ def validate_processed(paths: DataPaths) -> dict[str, Any]:
     checks["finite_cnv"] = bool(np.isfinite(data["cnv"]).all())
     _check(checks["finite_ge"], "teacher GE 含 NaN/Inf", errors=errors)
     _check(checks["finite_cnv"], "teacher CNV 含 NaN/Inf（未观测应填 0 + mask）", errors=errors)
+    drug = io.read_npz(paths.processed / "drug_features.npz")
+    checks["drug_features_286"] = int(len(drug["compound_uid"])) == 286
+    _check(checks["drug_features_286"], "processed 药物特征不是 286 个化合物", errors=errors)
+    checks["drug_features_smiles"] = int(drug["has_smiles"].sum()) == 286
+    if not checks["drug_features_smiles"]:
+        warnings.append("processed 药物特征 SMILES 覆盖不足 286")
     problems = Manifest(paths.processed / "manifest.json").verify()
     checks["processed_manifest"] = not problems
     errors.extend(problems)
-    return {"checks": checks, "errors": errors, "warnings": []}
+    return {"checks": checks, "errors": errors, "warnings": warnings}
 
 
 def validate_splits(paths: DataPaths) -> dict[str, Any]:
@@ -236,7 +245,7 @@ def validate_all(
         else {"status": "skipped"}
     )
     errors = [*canonical["errors"], *processed["errors"], *splits["errors"]]
-    warnings = [*canonical.get("warnings", [])]
+    warnings = [*canonical.get("warnings", []), *processed.get("warnings", [])]
     notes = [*splits.get("notes", [])]
     expected_markers = (
         "SMILES",

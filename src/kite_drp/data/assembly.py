@@ -298,7 +298,11 @@ def build_processed(
     canonical = Path(canonical_dir)
     processed = Path(processed_dir)
     processed.mkdir(parents=True, exist_ok=True)
-    result: dict[str, Any] = {"teacher": None, "student": None, "vae": None, "tcga": None}
+    from kite_drp.data.drug_assembly import build_drug_inputs
+
+    result: dict[str, Any] = {"teacher": None, "drug": None, "student": None, "vae": None, "tcga": None}
+    if stage in {"all", "teacher", "drug"}:
+        result["drug"] = build_drug_inputs(canonical, processed)
     if stage in {"all", "teacher"}:
         result["teacher"] = build_teacher_inputs(canonical, processed)
     if stage in {"all", "student"}:
@@ -314,6 +318,8 @@ def build_processed(
         "teacher_inputs",
         "teacher_index",
         "pool_index",
+        "drug_features_processed",
+        "compounds_processed",
         "panel_mutations",
         "mut_burden",
         "pathway_weights",

@@ -316,7 +316,7 @@ def register(subparsers: argparse._SubParsersAction) -> None:  # type: ignore[ty
 
     p = data_sub.add_parser("build", help="装配 processed model-input")
     p.add_argument("--config", type=str, default=None)
-    p.add_argument("--stage", choices=["all", "teacher", "student", "vae", "tcga"], default="all")
+    p.add_argument("--stage", choices=["all", "teacher", "drug", "student", "vae", "tcga"], default="all")
     p.set_defaults(func=cmd_build)
 
     p = data_sub.add_parser("validate", help="产物/划分/泄漏校验")
