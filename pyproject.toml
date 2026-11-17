@@ -108,7 +108,7 @@ clinical = [
     "lifelines>=0.30",
     "scikit-survival>=0.28",
 ]
-# 组合 extra：一条命令装齐全部 GPU/部署/临床依赖（等价于上面 5 个 extra 的并集）。
+# 组合 extra：一条命令装齐全部数据/GPU/部署/临床依赖（等价于上面 6 个 extra 的并集）。
 # 注意：会下载 ~3–4 GB 的 cu126 torch 与 CUDA 运行库，纯 CPU 机器请勿使用。
 all = [
     "pubchempy>=1.0.5",

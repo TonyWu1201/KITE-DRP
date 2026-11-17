@@ -13,7 +13,7 @@
 | 版本/时点 | 2026-11-17 抓取 |
 | 输入 | GDSC2 286 化合物（`compounds.parquet`） |
 | 文件 | `data/raw/drugs/smiles.tsv`、`smiles_manifest.json`、`smiles.parquet` |
-| 覆盖率 | **286/286 = 100%**；232 个按 InChIKey、54 个按 PubChem CID |
+| 覆盖率 | **286/286 = 100%**；233 个按 InChIKey、53 个按 PubChem CID |
 | 失败 | 0 |
 
 ## 2. 许可与引用
@@ -25,7 +25,7 @@
 ## 3. 内容与口径
 
 - 每个化合物保存 isomeric SMILES（缺失时回退 canonical SMILES）。
-- 数字药名按 PubChem CID 查询（54 个），其余按 InChIKey；无 InChIKey 时按名称/同义词。
+- 数字药名按 PubChem CID 查询（53 个），其余按 InChIKey；无 InChIKey 时按名称/同义词。
 - 保留 `pubchem_cid`、`pubchem_inchikey`、`inchikey_match`、`source`、`query`，便于审计。
 - 盐型/立体化学由 PubChem 记录决定；不保证与 GDSC 实验所用盐型一致。
 

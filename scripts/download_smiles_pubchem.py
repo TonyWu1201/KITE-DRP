@@ -65,53 +65,67 @@ def _query_one(
     names: list[str],
     delay: float,
 ) -> dict[str, Any]:
-    """按 InChIKey → 数字 CID → 名称 顺序查询。返回一行结果。"""
+    """按 InChIKey → 名称查询；仅无 InChIKey 时才尝试数字 CID。
+
+    有 InChIKey 时，PubChem 返回记录必须与期望 InChIKey 匹配，否则拒绝，
+    避免把同名的数字 CID 误当成药物结构。
+    """
     attempts: list[tuple[str, str]] = []
     if inchikey:
         attempts.append(("inchikey", inchikey))
-    for name in names:
-        if name.isdigit():
-            attempts.append(("cid", name))
-    for name in names:
-        attempts.append(("name", name))
+        attempts.extend(("name", name) for name in names)
+    else:
+        attempts.extend(("cid", name) for name in names if name.isdigit())
+        attempts.extend(("name", name) for name in names)
 
     last_error = ""
     for namespace, query in attempts:
-        try:
-            found = pcp.get_compounds(query, namespace)
-        except Exception as exc:  # 网络/404/名称解析失败
-            last_error = f"{type(exc).__name__}: {exc}"
-            time.sleep(delay)
-            continue
+        found = []
+        for retry in range(2):
+            try:
+                found = pcp.get_compounds(query, namespace)
+                break
+            except Exception as exc:  # 网络/404/名称解析失败
+                last_error = f"{type(exc).__name__}: {exc}"
+                if retry == 0:
+                    time.sleep(max(delay, 0.5))
         time.sleep(delay)
         if not found:
-            last_error = "not found"
+            last_error = last_error or "not found"
             continue
-        compound = found[0]
-        smiles = getattr(compound, "isomeric_smiles", None) or getattr(
-            compound, "canonical_smiles", None
-        )
-        if not smiles:
-            last_error = "no smiles in PubChem record"
-            continue
-        return {
-            "compound_uid": compound_uid,
-            "inchikey": inchikey,
-            "drug_name": names[0] if names else "",
-            "smiles": smiles,
-            "source": f"pubchem:{namespace}",
-            "query": query,
-            "pubchem_cid": getattr(compound, "cid", None),
-            "pubchem_inchikey": getattr(compound, "inchikey", None),
-            "inchikey_match": bool(
+        for compound in found:
+            pubchem_inchikey = getattr(compound, "inchikey", "") or ""
+            matches = bool(
                 not inchikey
-                or str(getattr(compound, "inchikey", "")).startswith(inchikey.split("-")[0])
-            ),
-            "n_candidates": len(found),
-            "status": "ok",
-            "error": "",
-            "fetched_utc": datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
-        }
+                or pubchem_inchikey == inchikey
+                or pubchem_inchikey.split("-")[0] == inchikey.split("-")[0]
+            )
+            if inchikey and not matches:
+                last_error = (
+                    f"inchikey mismatch: expected {inchikey}, got {pubchem_inchikey}"
+                )
+                continue
+            smiles = getattr(compound, "smiles", None) or getattr(
+                compound, "isomeric_smiles", None
+            )
+            if not smiles:
+                last_error = "no smiles in PubChem record"
+                continue
+            return {
+                "compound_uid": compound_uid,
+                "inchikey": inchikey,
+                "drug_name": names[0] if names else "",
+                "smiles": smiles,
+                "source": f"pubchem:{namespace}",
+                "query": query,
+                "pubchem_cid": getattr(compound, "cid", None),
+                "pubchem_inchikey": pubchem_inchikey,
+                "inchikey_match": matches,
+                "n_candidates": len(found),
+                "status": "ok",
+                "error": "",
+                "fetched_utc": datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            }
     return {
         "compound_uid": compound_uid,
         "inchikey": inchikey,
