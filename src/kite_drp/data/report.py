@@ -27,15 +27,14 @@ def build_report(paths: DataPaths | None = None) -> Path:
     stats_path = audit / "canonical_stats.json"
     payload = io.read_json(stats_path) if stats_path.is_file() else {}
     stats = payload.get("stats", payload)
-    labels = io.read_parquet(canonical / "labels.parquet") if (canonical / "labels.parquet").is_file() else pd.DataFrame()
+    labels = (
+        io.read_parquet(canonical / "labels.parquet")
+        if (canonical / "labels.parquet").is_file()
+        else pd.DataFrame()
+    )
     cell_lines = (
         io.read_parquet(canonical / "cell_lines.parquet")
         if (canonical / "cell_lines.parquet").is_file()
-        else pd.DataFrame()
-    )
-    compounds = (
-        io.read_parquet(canonical / "compounds.parquet")
-        if (canonical / "compounds.parquet").is_file()
         else pd.DataFrame()
     )
     drug_cov_path = canonical / "drug_feature_coverage.json"
@@ -44,11 +43,18 @@ def build_report(paths: DataPaths | None = None) -> Path:
     universes = io.read_json(universes_path) if universes_path.is_file() else {}
     pool_path = paths.processed / "pool_index.json"
     pools = io.read_json(pool_path) if pool_path.is_file() else {}
+    route_path = paths.processed / "student_inputs" / "route_a_meta.json"
+    route = io.read_json(route_path) if route_path.is_file() else {}
+    tcga_index_path = paths.processed / "tcga_inputs" / "index.json"
+    tcga_index = io.read_json(tcga_index_path) if tcga_index_path.is_file() else {}
 
     lines: list[str] = []
     lines.append("# KITE-DRP 数据质量报告")
     lines.append("")
-    lines.append("> 自动生成；数字来自本次 pipeline 实测。规划口径见 `plans&notes/2026-11-17_数据预处理详细规划.md`。")
+    lines.append(
+        "> 自动生成；数字来自本次 pipeline 实测。"
+        "规划口径见 `plans&notes/2026-11-17_数据预处理详细规划.md`。"
+    )
     lines.append("")
     lines.append("## 1. 样本漏斗")
     lines.append("")
@@ -83,11 +89,14 @@ def build_report(paths: DataPaths | None = None) -> Path:
         lines.append("|---|---:|")
         lines.append(f"| 细胞系 | {labels['cell_line_uid'].nunique()} |")
         lines.append(f"| 化合物 | {labels['compound_uid'].nunique()} |")
-        lines.append(f"| 每化合物标签数中位 | {labels.groupby('compound_uid').size().median():.0f} |")
-        lines.append(f"| 每化合物标签数最小 | {labels.groupby('compound_uid').size().min()} |")
+        median_labels = labels.groupby("compound_uid").size().median()
+        lines.append(f"| 每化合物标签数中位 | {median_labels:.0f} |")
+        min_labels = labels.groupby("compound_uid").size().min()
+        lines.append(f"| 每化合物标签数最小 | {min_labels} |")
         lines.append(f"| 外推标签占比 | {labels['extrapolated'].mean():.4f} |")
         lines.append(f"| suspect 标签占比 | {labels['suspect'].mean():.4f} |")
-        lines.append(f"| 双 ID 化合物数 | {labels.loc[labels['n_source_ids'] > 1, 'compound_uid'].nunique()} |")
+        dual_ids = labels.loc[labels["n_source_ids"] > 1, "compound_uid"].nunique()
+        lines.append(f"| 双 ID 化合物数 | {dual_ids} |")
     lines.append("")
     lines.append("## 3. 基因宇宙")
     lines.append("")
@@ -104,7 +113,17 @@ def build_report(paths: DataPaths | None = None) -> Path:
             lines.append(f"- {key}: {drug_cov.get(key)}")
         lines.append(f"- RDKit: {drug_cov.get('rdkit_available')}")
     lines.append("")
-    lines.append("## 5. naive 基线（G0-9）")
+    lines.append("## 5. 学生/TCGA 输入")
+    lines.append("")
+    route_name = route.get("route", "NA")
+    n_pathways = route.get("n_pathways", 0)
+    lines.append(f"- 学生表达路线：**{route_name}**；通路数 {n_pathways}")
+    if route.get("degraded"):
+        lines.append(f"- 降级原因：{route.get('reason', '')}")
+    if tcga_index:
+        lines.append(f"- TCGA 评估交集：{tcga_index.get('n_patients')} 例（GE+CNV+MU）")
+    lines.append("")
+    lines.append("## 6. naive 基线（G0-9）")
     lines.append("")
     baseline_dir = REPO_ROOT / "experiments" / "data_baselines"
     baseline_files = sorted(baseline_dir.glob("naive_*.json")) if baseline_dir.is_dir() else []
@@ -119,12 +138,13 @@ def build_report(paths: DataPaths | None = None) -> Path:
                     lines.append(
                         f"| {path.stem.replace('naive_', '')} | fold{fold}:{kind} | "
                         f"{_fmt(metrics.get('rmse'))} | {_fmt(metrics.get('r2'))} | "
-                        f"{_fmt(metrics.get('pcc'))} | {_fmt(metrics.get('scc'))} | {metrics.get('n')} |"
+                        f"{_fmt(metrics.get('pcc'))} | {_fmt(metrics.get('scc'))} | "
+                        f"{metrics.get('n')} |"
                     )
     else:
         lines.append("- 尚未运行（`kite-drp eval naive --split p1_lco_s0`）。")
     lines.append("")
-    lines.append("## 6. 降级与缺口")
+    lines.append("## 7. 降级与缺口")
     lines.append("")
     warnings = payload.get("warnings", stats.get("warnings", []))
     if warnings:
@@ -133,7 +153,7 @@ def build_report(paths: DataPaths | None = None) -> Path:
     else:
         lines.append("- 无")
     lines.append("")
-    lines.append("## 7. 与计划书对照")
+    lines.append("## 8. 与计划书对照")
     lines.append("")
     lines.append("| 项 | 规划/审计值 | 本次实测 |")
     lines.append("|---|---|---|")
@@ -150,7 +170,7 @@ def build_report(paths: DataPaths | None = None) -> Path:
             "删除后有效基因 18,613（规划按 19,144 估计）；以构建脚本 manifest 为准。"
         )
         lines.append("")
-    lines.append("## 8. 复现命令")
+    lines.append("## 9. 复现命令")
     lines.append("")
     lines.append("```bash")
     lines.append(".venv/bin/python -m kite_drp data pipeline --profile core")

@@ -2,15 +2,16 @@
 
 from __future__ import annotations
 
-import traceback
+from collections.abc import Iterable
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any
 
 import numpy as np
 import pandas as pd
 
 from kite_drp.common.paths import REPO_ROOT
 from kite_drp.data import ids, io, registry
+from kite_drp.data import tcga as tcga_module
 from kite_drp.data.config import DataPaths, load_data_config
 from kite_drp.data.drugs import build_drug_features
 from kite_drp.data.genes import (
@@ -27,7 +28,6 @@ from kite_drp.data.omics import expression as expression_module
 from kite_drp.data.omics import methylation as methylation_module
 from kite_drp.data.omics import mutations as mutations_module
 from kite_drp.data.priors import build_dti, build_pathways, build_ppi, find_gmt_files
-from kite_drp.data import tcga as tcga_module
 
 
 def _raw_path(config: dict[str, Any], key: str, default: str) -> Path:
@@ -51,16 +51,25 @@ def _panel_from_file(path: Path, master: GeneMaster) -> list[str]:
     if not path.is_file():
         return []
     genes: list[str] = []
-    if path.suffix.lower() in {".tsv", ".csv", ".txt"}:
-        frame = pd.read_csv(path, sep=None, engine="python", header=None, dtype=str)
-        for value in frame.to_numpy().ravel():
-            symbol, _ = master.resolve(value)
-            if symbol:
-                genes.append(symbol)
+    if path.suffix.lower() in {".tsv", ".csv"}:
+        separator = "\t" if path.suffix.lower() == ".tsv" else ","
+        frame = pd.read_csv(path, sep=separator, header=None, dtype=str)
+        values = frame.to_numpy().ravel().tolist()
+    else:
+        values = path.read_text(encoding="utf-8", errors="replace").splitlines()
+    for value in values:
+        symbol, _ = master.resolve(value)
+        if symbol:
+            genes.append(symbol)
     return sorted(set(genes))
 
 
-def _frequency_panel(mutations: mutations_module.MutationData, *, min_frequency: float = 0.01, max_genes: int = 500) -> list[str]:
+def _frequency_panel(
+    mutations: mutations_module.MutationData,
+    *,
+    min_frequency: float = 0.01,
+    max_genes: int = 500,
+) -> list[str]:
     if mutations.matrix_A.size == 0:
         return []
     counts = mutations.matrix_A.sum(axis=0)
@@ -89,6 +98,9 @@ def _pathway_sources(config: dict[str, Any]) -> list[Path]:
     ]:
         if base.exists():
             files.extend(find_gmt_files(base))
+    # 默认只用 GO 全量注释；experimental GMT 留给消融
+    if any(path.name == "goa_human.gmt" for path in files):
+        files = [path for path in files if path.name != "goa_human_experimental.gmt"]
     return sorted(set(files))
 
 
@@ -123,7 +135,9 @@ def build_canonical(
     code = code_hash()
     cfg_hash = config_hash(config)
     raw_paths = {
-        key: str(value) for key, value in config.get("raw_files", {}).items() if isinstance(value, Path)
+        key: str(value)
+        for key, value in config.get("raw_files", {}).items()
+        if isinstance(value, Path)
     }
     inputs = input_hashes(raw_paths)
     result: dict[str, Any] = {"status": "ok", "warnings": [], "artifacts": [], "stats": {}}
@@ -137,11 +151,15 @@ def build_canonical(
     hgnc_path = _raw_path(config, "hgnc", "data/raw/hgnc/Gene.csv")
     model_path = _raw_path(config, "depmap_model", "data/raw/depmap/Model.csv")
     expr_path = _raw_path(
-        config, "depmap_expression", "data/raw/depmap/DepMap_ExpressionTPMLogp1HumanProteinCodingGenes.csv"
+        config,
+        "depmap_expression",
+        "data/raw/depmap/DepMap_ExpressionTPMLogp1HumanProteinCodingGenes.csv",
     )
     cnv_path = _raw_path(config, "depmap_cnv", "data/raw/depmap/DepMap_CNGeneWGS.csv")
     mu_path = _raw_path(config, "depmap_mutations", "data/raw/depmap/DepMap_SomaticMutations.csv")
-    labels_path = _raw_path(config, "dose_response", "data/raw/gdsc/GDSC2_fitted_dose_response_27Oct23.csv")
+    labels_path = _raw_path(
+        config, "dose_response", "data/raw/gdsc/GDSC2_fitted_dose_response_27Oct23.csv"
+    )
     compounds_path = _raw_path(
         config, "compounds", "data/raw/gdsc/screened_compounds_rel_8.5_inchi.csv"
     )
@@ -184,8 +202,12 @@ def build_canonical(
     # 2. 先验（PPI / 通路）
     # ------------------------------------------------------------------
     string_dir = REPO_ROOT / "data" / "raw" / "string"
-    links_path = _raw_path(config, "string_links", str(string_dir / "9606.protein.links.v12.5.txt.gz"))
-    aliases_path = _raw_path(config, "string_aliases", str(string_dir / "9606.protein.aliases.v12.5.txt.gz"))
+    links_path = _raw_path(
+        config, "string_links", str(string_dir / "9606.protein.links.v12.5.txt.gz")
+    )
+    aliases_path = _raw_path(
+        config, "string_aliases", str(string_dir / "9606.protein.aliases.v12.5.txt.gz")
+    )
     ppi = None
     if Path(links_path).is_file() and Path(aliases_path).is_file():
         ppi = build_ppi(
@@ -207,6 +229,8 @@ def build_canonical(
             master,
             universe=set(expression.frame.columns),
             min_genes=int(config["priors"]["pathways"].get("min_genes", 10)),
+            max_genes=int(config["priors"]["pathways"].get("max_genes", 500)),
+            max_pathways=int(config["priors"]["pathways"].get("max_pathways", 1000)),
         )
         pathway_genes = sorted(pathways["gene"].unique().tolist()) if not pathways.empty else []
         result["stats"]["pathways"] = {
@@ -232,7 +256,8 @@ def build_canonical(
         )
         panel_source = "frequency_defined"
         result["warnings"].append(
-            "外部突变 panel 清单缺失：U_panel 使用频率定义（非沉默突变携带率 >=1%，最多 500 基因）。"
+            "外部突变 panel 清单缺失：U_panel 使用频率定义"
+            "（非沉默突变携带率 >=1%，最多 500 基因）。"
         )
 
     universes = build_universes(
@@ -290,7 +315,11 @@ def build_canonical(
     result["stats"]["labels"] = label_stats
     result["stats"]["main_pool_cells"] = int(cell_lines["in_main_pool"].sum())
     result["stats"]["main_pool_labels"] = int(
-        labels[labels["cell_line_uid"].isin(cell_lines.loc[cell_lines["in_main_pool"], "cell_line_uid"])].shape[0]
+        labels[
+            labels["cell_line_uid"].isin(
+                cell_lines.loc[cell_lines["in_main_pool"], "cell_line_uid"]
+            )
+        ].shape[0]
     )
 
     # ------------------------------------------------------------------
@@ -310,7 +339,12 @@ def build_canonical(
     expression_module.write_expression(expression_subset, paths.canonical / "expression.parquet")
     cnv_module.write_cnv(cnv_subset, paths.canonical / "cnv.parquet")
     mutations_module.write_mutations(mutations, paths.canonical)
-    io.write_parquet(ppi.edges if ppi else pd.DataFrame(columns=["gene_a", "gene_b", "combined_score"]), paths.canonical / "ppi.parquet")
+    io.write_parquet(
+        ppi.edges
+        if ppi
+        else pd.DataFrame(columns=["gene_a", "gene_b", "combined_score"]),
+        paths.canonical / "ppi.parquet",
+    )
     io.write_parquet(pathways, paths.canonical / "pathways.parquet")
 
     gene_frame, _ = build_gene_artifact(
@@ -373,7 +407,9 @@ def build_canonical(
 
     dgidb_path = REPO_ROOT / "data" / "raw" / "dgidb" / "interactions.tsv"
     if dgidb_path.is_file():
-        dti, dti_info = build_dti(compounds, dgidb_path, master, allowed_genes=universes["teach_ge"])
+        dti, dti_info = build_dti(
+            compounds, dgidb_path, master, allowed_genes=universes["teach_ge"]
+        )
         io.write_parquet(dti, paths.canonical / "dti.parquet")
         result["stats"]["dti"] = dti_info
     else:
@@ -420,7 +456,10 @@ def build_canonical(
         "universes": {key: len(value) for key, value in universes.items()},
     }
     io.write_json(paths.audit / "canonical_stats.json", stats_payload)
-    io.write_json(paths.canonical / "gene_universes.json", {**universes, "panel_source": panel_source})
+    io.write_json(
+        paths.canonical / "gene_universes.json",
+        {**universes, "panel_source": panel_source},
+    )
     # manifest
     from kite_drp.data.manifest import Manifest
 
@@ -484,7 +523,8 @@ def _build_tcga_offline(
     file_index = tcga_module.load_file_index(index_path)
     if file_index is None:
         result.setdefault("warnings", []).append(
-            "TCGA file→case 映射缺失：GE/CNV/METH 患者级矩阵未装配（MU/clinical/CDR/Ding 可离线构建）。"
+            "TCGA file→case 映射缺失：GE/CNV/METH 患者级矩阵未装配"
+            "（MU/clinical/CDR/Ding 可离线构建）。"
         )
 
     stats: dict[str, Any] = {"file_index": None if file_index is None else len(file_index)}

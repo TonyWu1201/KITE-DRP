@@ -12,6 +12,8 @@
 | `ccle_methylation.md` | 旧 CCLE 甲基化（RRBS TSS1kb） | 教师 METH（可选+掩码） | 已核实，默认关闭（D21） |
 | `priors_string_hgnc_dgidb.md` | STRING / HGNC / DGIdb | 教师图先验 + 基因真源 | 已核实（STRING CC BY 4.0） |
 | `drug_smiles_pubchem.md` | GDSC 药物结构（SMILES，PubChem） | 药物图/FP/scaffold | 已生成，286/286 覆盖 |
+| `pathways_reactome_go.md` | Reactome / GO 通路基因集 | 学生通路分数/教师解释 | 已生成，1,000 通路 |
+| `mutation_panel_msk_impact.md` | MSK-IMPACT 468 panel | 学生突变输入 | 已生成，469 symbol / 462 交集 |
 | `tcga_cesc.md` | TCGA-CESC 四模态 | L1/L2/L2′/L3（评估域） | 离线部分已核实；file→case 映射待建表（D29） |
 | `ding2016.md` | Ding 2016 响应标签 | L2 弱标签唯一来源 | 已核实；仅 Cisplatin-CESC n=59 |
 | 待补 | CTRPv2 / PRISM / GDSC1 | 外部验证（D12） | 未下载 |

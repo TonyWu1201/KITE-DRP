@@ -2,12 +2,11 @@
 
 from __future__ import annotations
 
-import re
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any
 
-import numpy as np
 import pandas as pd
 
 from kite_drp.data import io
@@ -143,7 +142,9 @@ def build_dti(
                 name_to_uid.setdefault(key, row.compound_uid)
 
     interactions = pd.read_csv(dgidb_path, sep="\t", comment="#", low_memory=False)
-    drug_columns = [column for column in ("drug_name", "drug_claim_name") if column in interactions.columns]
+    drug_columns = [
+        column for column in ("drug_name", "drug_claim_name") if column in interactions.columns
+    ]
     gene_column = "gene_name" if "gene_name" in interactions.columns else "gene_claim_name"
     matched_drugs: set[str] = set()
     for row in interactions.itertuples(index=False):
@@ -185,7 +186,9 @@ def build_dti(
         "edges": int(len(dti)),
         "compounds_covered": int(dti["compound_uid"].nunique()) if not dti.empty else 0,
         "genes_covered": int(dti["hgnc_symbol"].nunique()) if not dti.empty else 0,
-        "gdsc_target_compounds": int(compounds["has_target"].sum()) if "has_target" in compounds else 0,
+        "gdsc_target_compounds": (
+            int(compounds["has_target"].sum()) if "has_target" in compounds else 0
+        ),
         "dgidb_matched_compounds": len(matched_drugs),
     }
     return dti, info
@@ -201,19 +204,35 @@ def find_gmt_files(source: str | Path) -> list[Path]:
     return []
 
 
+def _infer_source(path: Path) -> str:
+    text = str(path).lower()
+    if "reactome" in text:
+        return "reactome"
+    if "go" in text or "goa" in text:
+        return "go"
+    return "external"
+
+
 def build_pathways(
     gmt_files: Iterable[str | Path],
     master: GeneMaster,
     *,
     universe: set[str],
     min_genes: int = 10,
-    source_name: str = "external",
+    max_genes: int | None = 500,
+    max_pathways: int | None = 1000,
+    source_name: str | None = None,
 ) -> tuple[pd.DataFrame, list[str]]:
-    """解析 GMT → (pathway_id, source, gene) 长表；只保留 >=min_genes 的通路。"""
+    """解析 GMT → (pathway_id, source, gene) 长表。
+
+    过滤：>=min_genes；若给 max_genes，剔除过大通路；若给 max_pathways，
+    按基因数降序 + pathway_id 确定性截断（保证端侧权重矩阵可控）。
+    """
     records: list[dict[str, Any]] = []
     pathway_genes: dict[str, set[str]] = {}
     for gmt in gmt_files:
         path = Path(gmt)
+        source = source_name or _infer_source(path)
         with path.open(encoding="utf-8", errors="replace") as handle:
             for line in handle:
                 parts = line.rstrip("\n").split("\t")
@@ -226,21 +245,46 @@ def build_pathways(
                     symbol, _ = master.resolve(gene)
                     if symbol and symbol in universe:
                         resolved.add(symbol)
-                if len(resolved) >= min_genes:
-                    pathway_genes[f"{source_name}:{pathway_id}"] = resolved
+                if (
+                    len(resolved) >= min_genes
+                    and (max_genes is None or len(resolved) <= max_genes)
+                ):
+                    pathway_genes[f"{source}:{pathway_id}"] = resolved
                     for gene in sorted(resolved):
                         records.append(
                             {
-                                "pathway_id": f"{source_name}:{pathway_id}",
-                                "source": source_name,
+                                "pathway_id": f"{source}:{pathway_id}",
+                                "source": source,
                                 "gene": gene,
                             }
                         )
     pathways = pd.DataFrame(records, columns=["pathway_id", "source", "gene"])
     if not pathways.empty:
         counts = pathways.groupby("pathway_id")["gene"].transform("size")
-        pathways = pathways[counts >= min_genes].sort_values(["pathway_id", "gene"]).reset_index(drop=True)
+        pathways = (
+            pathways[counts >= min_genes]
+            .sort_values(["pathway_id", "gene"])
+            .reset_index(drop=True)
+        )
         pathways["n_genes"] = pathways.groupby("pathway_id")["gene"].transform("size")
+        if max_pathways is not None:
+            sizes = pathways[["pathway_id", "source", "n_genes"]].drop_duplicates()
+            sources = sorted(sizes["source"].unique().tolist())
+            per_source = max(1, max_pathways // max(len(sources), 1))
+            keep_ids: set[str] = set()
+            for source in sources:
+                subset = sizes[sizes["source"] == source].sort_values(
+                    ["n_genes", "pathway_id"], ascending=[False, True]
+                )
+                keep_ids.update(subset["pathway_id"].head(per_source).tolist())
+            pathways = pathways[pathways["pathway_id"].isin(keep_ids)]
+            pathways = pathways.sort_values(["pathway_id", "gene"]).reset_index(drop=True)
+            pathways["n_genes"] = pathways.groupby("pathway_id")["gene"].transform("size")
+            pathway_genes = {
+                pathway_id: genes
+                for pathway_id, genes in pathway_genes.items()
+                if pathway_id in keep_ids
+            }
     kept = sorted(pathway_genes)
     return pathways, kept
 

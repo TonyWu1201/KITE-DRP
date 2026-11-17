@@ -12,6 +12,9 @@
 | 旧 CCLE 资源（甲基化/注释） | `data/raw/ccle/` | Broad/CCLE 旧资源条款；非权威主表，仅 fallback | ⚠️ 待核实原文 |
 | STRING v12.5 / v12.0 | `data/raw/string/` | CC BY 4.0，仅需署名（须引用 STRING 文献） | ✅ 已知 |
 | PubChem（SMILES） | `data/raw/drugs/` | PubChem 公共数据；再分发前核对 NCBI 条款 | ⚠️ 待核实原文 |
+| Reactome | `data/raw/reactome/` | 开放许可（CC BY 4.0 量级），需署名 | ⚠️ 待核实原文 |
+| GO | `data/raw/go/` | CC BY 4.0，需署名 | ✅ 已知 |
+| cBioPortal gene panels | `data/raw/panel/` | 基因列表为事实信息；门户条款待核 | ⚠️ 待核实原文 |
 | DGIdb v5.0.13 | `data/raw/dgidb/` | 混合来源、再分发受限；内部研究用，不打包发布 | ⚠️ 待核实逐源条款 |
 | HGNC | `data/raw/hgnc/` | 引用 HGNC；再分发条款以官方为准 | ⚠️ 待核实原文 |
 | TCGA（GDC 开放层） | `data/raw/tcga/` | NIH 开放获取，需引用；受控层不得下载/分发 | ✅ 开放层可用 |
@@ -19,7 +22,7 @@
 | Ding, Zu & Gu 2016 | `data/raw/tcga/ding2016/` | 引用原文；为人工整理的响应标签，非 TCGA 官方药敏数据 | ✅ 已知 |
 | CTRPv2 / PRISM / GDSC1 外部验证 | 未下载 | 各自学术条款，下载前补数据卡与许可说明 | ⏳ 未开始 |
 
-> 逐源文件：`gdsc2.md`、`depmap.md`、`string.md`、`hgnc.md`、`dgidb.md`、`tcga.md`、`tcga_cdr.md`、`ding2016.md`、`pubchem.md`。
+> 逐源文件：`gdsc2.md`、`depmap.md`、`string.md`、`hgnc.md`、`dgidb.md`、`tcga.md`、`tcga_cdr.md`、`ding2016.md`、`pubchem.md`、`reactome.md`、`go.md`、`cbioportal.md`。
 
 > 更细的文件清单与版本信息见 [`../raw/README.md`](../raw/README.md)（原始数据索引入口）。
 

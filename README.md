@@ -136,9 +136,16 @@ git lfs ls-files     # 查看 LFS 跟踪文件
 原始数据就位后，用统一 CLI 重建 canonical → splits → fit_stats → processed：
 
 ```bash
-# 药物结构（可选，但 scaffold/P3 需要）：PubChem → data/raw/drugs/smiles.tsv
+# 药物结构（scaffold/P3 需要）：PubChem → data/raw/drugs/smiles.tsv
 uv sync --extra data --extra graph
 .venv/bin/python scripts/download_smiles_pubchem.py
+
+# 先验资源（学生路线 A / 学生 mutation panel）
+.venv/bin/python scripts/download_pathways.py
+.venv/bin/python scripts/download_mutation_panel.py
+
+# TCGA file→case（联网一次；之后冻结）
+.venv/bin/python -m kite_drp data canonical --only tcga --fetch-file-index
 
 # 一键（离线 core profile；缺失资源自动降级并写报告）
 .venv/bin/python -m kite_drp data pipeline --profile core

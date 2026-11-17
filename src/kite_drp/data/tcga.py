@@ -11,9 +11,10 @@ import json
 import tarfile
 import urllib.request
 import zipfile
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -30,7 +31,6 @@ GDC_FIELDS = [
     "cases.submitter_id",
     "associated_entities.entity_submitter_id",
     "associated_entities.entity_type",
-    "associated_entities.sample_type",
     "associated_entities.case_id",
 ]
 SILENT_CLASSES = {
@@ -71,6 +71,14 @@ def _post_gdc(payload: dict[str, Any], *, timeout: int = 60) -> dict[str, Any]:
         return json.loads(response.read().decode("utf-8"))
 
 
+def _sample_type_from_barcode(barcode: str | None) -> str | None:
+    """TCGA barcode 第 4 段（如 01A/06A）即 sample type。"""
+    if not barcode:
+        return None
+    parts = str(barcode).split("-")
+    return parts[3] if len(parts) > 3 else None
+
+
 def fetch_file_index(
     file_ids: Iterable[str],
     out_path: str | Path,
@@ -100,7 +108,9 @@ def fetch_file_index(
                     "platform": hit.get("platform"),
                     "case_id": cases[0].get("case_id"),
                     "case_submitter_id": cases[0].get("submitter_id"),
-                    "sample_type": entities[0].get("sample_type"),
+                    "sample_type": _sample_type_from_barcode(
+                        entities[0].get("entity_submitter_id")
+                    ),
                     "entity_submitter_id": entities[0].get("entity_submitter_id"),
                     "entity_type": entities[0].get("entity_type"),
                 }
@@ -162,6 +172,9 @@ def build_tcga_expression(
             skipped += 1
             continue
         patient, sample = case
+        if not str(sample).startswith(("01", "06")):
+            skipped += 1
+            continue
         frame = pd.read_csv(
             path,
             sep="\t",
@@ -180,7 +193,9 @@ def build_tcga_expression(
         frame = frame.dropna(subset=["symbol"])
         frame = frame.drop_duplicates("symbol")
         values = pd.to_numeric(frame["tpm_unstranded"], errors="coerce")
-        series = pd.Series(np.log2(values.to_numpy(dtype=float) + 1.0), index=frame["symbol"].to_numpy())
+        series = pd.Series(
+            np.log2(values.to_numpy(dtype=float) + 1.0), index=frame["symbol"].to_numpy()
+        )
         if allowed is not None:
             series = series[series.index.isin(allowed)]
         rows.append(series.rename(patient))
@@ -260,7 +275,9 @@ def build_tcga_meth_stats(cesc_dir: str | Path, file_index: pd.DataFrame) -> pd.
         case = mapping.get(path.parent.name)
         if not case:
             continue
-        frame = pd.read_csv(path, sep="\t", header=None, names=["probe", "beta"], dtype={"probe": str})
+        frame = pd.read_csv(
+            path, sep="\t", header=None, names=["probe", "beta"], dtype={"probe": str}
+        )
         beta = pd.to_numeric(frame["beta"], errors="coerce")
         records.append(
             {
@@ -422,15 +439,22 @@ def build_tcga_mutations(
 def write_tcga_mutations(data: TcgaMutationData, directory: str | Path) -> dict[str, Path]:
     directory = Path(directory)
     outputs = {
-        "A": io.save_packed_matrix(directory / "tcga_mu.npz", data.matrix_A, data.patient_ids, data.genes_A),
+        "A": io.save_packed_matrix(
+            directory / "tcga_mu.npz", data.matrix_A, data.patient_ids, data.genes_A
+        ),
         "B": io.save_packed_matrix(
-            directory / "tcga_mu_B.npz", data.matrix_B, data.patient_ids, data.genes_B, name="matrix"
+            directory / "tcga_mu_B.npz",
+            data.matrix_B,
+            data.patient_ids,
+            data.genes_B,
         ),
         "tmb": io.write_parquet(
             data.tmb.rename("tmb").rename_axis("patient_id").reset_index(),
             directory / "tcga_tmb.parquet",
         ),
-        "sample_types": io.write_parquet(data.sample_types, directory / "tcga_sample_types.parquet"),
+        "sample_types": io.write_parquet(
+            data.sample_types, directory / "tcga_sample_types.parquet"
+        ),
         "long": io.write_parquet(data.long_A, directory / "tcga_mutation_long.parquet"),
     }
     return outputs
@@ -466,7 +490,9 @@ def build_tcga_clinical(path: str | Path) -> tuple[pd.DataFrame, pd.DataFrame, d
         "number_of_cycles": "treatments.number_of_cycles",
         "treatment_type": "treatments.treatment_type",
     }
-    available = {name: source for name, source in treatment_columns.items() if source in raw.columns}
+    available = {
+        name: source for name, source in treatment_columns.items() if source in raw.columns
+    }
     treatments = raw[[id_column, *available.values()]].copy()
     treatments = treatments.rename(columns={v: k for k, v in available.items()})
     treatments = treatments.rename(columns={id_column: "patient_id"})
@@ -490,11 +516,17 @@ def build_tcga_clinical(path: str | Path) -> tuple[pd.DataFrame, pd.DataFrame, d
         "tumor_grade": "diagnoses.tumor_grade",
         "histological_type": "diagnoses.morphology",
     }
-    available_clinical = {name: source for name, source in clinical_columns.items() if source in raw.columns}
+    available_clinical = {
+        name: source for name, source in clinical_columns.items() if source in raw.columns
+    }
     clinical = raw[list(available_clinical.values())].rename(
         columns={v: k for k, v in available_clinical.items()}
     )
-    clinical = clinical.drop_duplicates("patient_id").sort_values("patient_id").reset_index(drop=True)
+    clinical = (
+        clinical.drop_duplicates("patient_id")
+        .sort_values("patient_id")
+        .reset_index(drop=True)
+    )
     info = {
         "patients": int(clinical["patient_id"].nunique()),
         "clinical_rows": int(len(raw)),
@@ -508,26 +540,34 @@ def build_tcga_clinical(path: str | Path) -> tuple[pd.DataFrame, pd.DataFrame, d
 # ---------------------------------------------------------------------------
 # CDR / Ding2016
 # ---------------------------------------------------------------------------
-def build_tcga_cdr(path: str | Path, *, cohort: str = "CESC") -> tuple[pd.DataFrame, dict[str, Any]]:
+def build_tcga_cdr(
+    path: str | Path, *, cohort: str = "CESC"
+) -> tuple[pd.DataFrame, dict[str, Any]]:
     frame = io.xlsx_sheet_frame(path, "TCGA-CDR")
     frame.columns = [str(column).strip() for column in frame.columns]
     if "type" in frame.columns:
         cohort_frame = frame[frame["type"].astype(str).str.upper() == cohort.upper()].copy()
     else:  # 兼容没有 type 列的情况
         cohort_frame = frame.copy()
-    cohort_frame = cohort_frame.drop(columns=[column for column in cohort_frame.columns if column.startswith("col_")])
+    cohort_frame = cohort_frame.drop(
+        columns=[column for column in cohort_frame.columns if column.startswith("col_")]
+    )
     cohort_frame = io.coerce_frame_for_parquet(cohort_frame)
     info = {
         "rows": int(len(frame)),
         "cohort_rows": int(len(cohort_frame)),
         "pfi_available": int(cohort_frame["PFI"].notna().sum()) if "PFI" in cohort_frame else 0,
-        "pfi_events": int(pd.to_numeric(cohort_frame.get("PFI"), errors="coerce").fillna(0).eq(1).sum()),
+        "pfi_events": int(
+            pd.to_numeric(cohort_frame.get("PFI"), errors="coerce").fillna(0).eq(1).sum()
+        ),
         "os_available": int(cohort_frame["OS"].notna().sum()) if "OS" in cohort_frame else 0,
     }
     return cohort_frame.reset_index(drop=True), info
 
 
-def build_tcga_ding(zip_path: str | Path, *, cohort: str = "CESC") -> tuple[pd.DataFrame, dict[str, Any]]:
+def build_tcga_ding(
+    zip_path: str | Path, *, cohort: str = "CESC"
+) -> tuple[pd.DataFrame, dict[str, Any]]:
     with zipfile.ZipFile(zip_path) as archive:
         xlsx_names = [name for name in archive.namelist() if name.endswith(".xlsx")]
         if not xlsx_names:
@@ -555,7 +595,11 @@ def build_tcga_ding(zip_path: str | Path, *, cohort: str = "CESC") -> tuple[pd.D
         "cohort_rows": int(len(cohort_frame)),
         "cohort_patients": int(cohort_frame["bcr_patient_barcode"].nunique()),
         "cisplatin_rows": int(cohort_frame["is_cisplatin"].sum()),
-        "cisplatin_patients": int(cohort_frame.loc[cohort_frame["is_cisplatin"], "bcr_patient_barcode"].nunique()),
+        "cisplatin_patients": int(
+            cohort_frame.loc[
+                cohort_frame["is_cisplatin"], "bcr_patient_barcode"
+            ].nunique()
+        ),
         "response_counts": cohort_frame["response_raw"].value_counts().to_dict(),
         "cisplatin_response_counts": cohort_frame.loc[
             cohort_frame["is_cisplatin"], "response_raw"

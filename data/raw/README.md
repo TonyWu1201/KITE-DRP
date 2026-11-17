@@ -43,6 +43,16 @@ data/raw/
 │   ├── smiles.tsv
 │   ├── smiles.parquet
 │   └── smiles_manifest.json
+├── reactome/                       ← Reactome current GMT（2026-11-17）
+│   └── ReactomePathways.gmt
+├── go/                             ← GO human GAF/OBO 与转换 GMT（2026-11-17）
+│   ├── goa_human.gaf.gz
+│   ├── go-basic.obo
+│   ├── goa_human.gmt
+│   └── goa_human_experimental.gmt
+├── panel/                          ← cBioPortal MSK-IMPACT 468（2026-11-17）
+│   ├── IMPACT468.txt
+│   └── IMPACT468_manifest.json
 └── tcga/                           ← TCGA（当前只有 CESC；BRCA/LUAD 未下载）
     ├── CESC/                       ← GDC processed 四模态原始下载（1,204 个 parcel 目录）
     ├── clinical/                   ← GDC Portal 临床导出（CESC，tar.gz）

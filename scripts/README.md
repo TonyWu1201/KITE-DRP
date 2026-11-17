@@ -7,6 +7,8 @@
 | [`check_env.py`](check_env.py) | 跨平台 | 环境自检：Python/依赖版本/CUDA 12.6/驱动/git-lfs/目录 |
 | [`preprocess_all.sh`](preprocess_all.sh) | Linux（bash） | G0 数据管线一键重建（inventory→canonical→splits→fit-stats→build→validate→report） |
 | [`download_smiles_pubchem.py`](download_smiles_pubchem.py) | 跨平台 | 用 pubchempy 从 PubChem 下载 GDSC 化合物 SMILES（可续传/限速） |
+| [`download_pathways.py`](download_pathways.py) | 跨平台 | 下载 Reactome GMT + GO GAF/OBO，转换为 GMT |
+| [`download_mutation_panel.py`](download_mutation_panel.py) | 跨平台 | 从 cBioPortal API 下载 MSK-IMPACT panel 基因清单 |
 | [`nightly_data_check.sh`](nightly_data_check.sh) | Linux（bash） | 夜间全量校验 + pytest + 质量报告 |
 
 ## 环境自检
@@ -22,6 +24,8 @@ uv run kite-drp doctor                 # 等价入口（CLI）
 uv sync --extra data                                # pubchempy（SMILES 下载）
 uv sync --extra graph                               # rdkit/torch-geometric（FP/scaffold/图）
 .venv/bin/python scripts/download_smiles_pubchem.py # → data/raw/drugs/smiles.tsv
+.venv/bin/python scripts/download_pathways.py       # → Reactome/GO GMT
+.venv/bin/python scripts/download_mutation_panel.py # → MSK-IMPACT 468
 bash scripts/preprocess_all.sh --profile core       # 离线全量重建
 bash scripts/preprocess_all.sh --profile full       # 额外尝试 GDC file index
 bash scripts/nightly_data_check.sh                  # validate --strict + pytest + report

@@ -64,6 +64,8 @@ priors:
   pathways:
     sources: [reactome, go]
     min_genes: 10
+    max_genes: 500          # 剔除过大通路，控制端侧权重矩阵
+    max_pathways: 1000      # 按基因数降序截断；保证 500–1000 维学生输入
     # 本地 GMT 路径（不存在时降级为路线 B）
     files: []
 
@@ -89,7 +91,7 @@ raw_files:
   ccle_methylation: data/raw/ccle/CCLE_DNA_methylation_TSS1kb.txt
   tcga_file_index: data/interim/tcga/file_index.parquet
   # 可选：外部 panel 清单（纯文本/CSV，每行一个基因）
-  mutation_panel: null
+  mutation_panel: data/raw/panel/IMPACT468.txt
 
 local_files:
   # 可选：本地 SMILES 表（compound_uid/inchikey/drug_name,smiles）

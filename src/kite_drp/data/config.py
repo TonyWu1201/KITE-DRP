@@ -87,9 +87,14 @@ def load_data_config(path: str | Path | None = None) -> dict[str, Any]:
     priors["ppi"].setdefault("version", "v12.5")
     priors.setdefault("pathways", {"sources": ["reactome", "go"], "min_genes": 10})
     priors["pathways"].setdefault("min_genes", 10)
+    priors["pathways"].setdefault("max_genes", 500)
+    priors["pathways"].setdefault("max_pathways", 1000)
 
     splits = config["splits"]
-    splits.setdefault("protocols", ["p0_random", "p1_lco", "p2_ldo", "p3_scaffold", "p4_lto", "lpo"])
+    splits.setdefault(
+        "protocols",
+        ["p0_random", "p1_lco", "p2_ldo", "p3_scaffold", "p4_lto", "lpo"],
+    )
     splits.setdefault("seeds", [0, 1, 2])
 
     # 相对路径统一转绝对路径
