@@ -36,3 +36,4 @@
 | [0001](0001-repository-structure-and-data-flow.md) | 仓库结构与数据分层重构 | 已接受 | 2026-11-15 |
 | [0002](0002-python-environment-cuda126.md) | Python 环境：uv + 双平台 + CUDA 12.6 | 已接受 | 2026-11-15 |
 | [0003](0003-deploy-server-and-submodule.md) | 端侧部署服务器与子模块策略 | 已接受 | 2026-11-15 |
+| [0004](0004-data-pipeline-g0-decisions.md) | G0 数据管线实现口径与两处实测偏差 | 已接受 | 2026-11-17 |

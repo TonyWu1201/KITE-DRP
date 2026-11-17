@@ -1,10 +1,35 @@
-"""数据层（计划书 §3）：下载、预处理、划分、dataset。
+"""数据层（计划书 §3）：清单、预处理、划分、fit-context 与 dataset。
 
-规划模块（随 G0 门禁逐步实现）：
+模块对应规划 §8.1：
 
-- ``download.py``   各数据源下载与校验（raw 不提交 git）
-- ``preprocess.py`` 基因对齐/去重/归一化，产物写入 ``data/interim``、``data/processed``
-- ``splits.py``     LCO/LDO/scaffold 等划分协议（§7.2），产物写入 ``data/splits``
-- ``dataset.py``    PyTorch Dataset/DataLoader，读取 processed 与 splits
-- ``schemas.py``    样本/药物/标签的 schema 与单位约定（§2.1）
+- :mod:`kite_drp.data.inventory`  L0 原始清单
+- :mod:`kite_drp.data.canonical`  L1 canonical 编排
+- :mod:`kite_drp.data.assembly`   L2 model-input 装配
+- :mod:`kite_drp.data.splits`     P0–P4/LPO
+- :mod:`kite_drp.data.fit`        fold 内统计量 / FitContext
+- :mod:`kite_drp.data.validation` 产物与泄漏校验
+- :mod:`kite_drp.data.dataset`    模型侧 Dataset 契约
 """
+
+from __future__ import annotations
+
+__all__ = [
+    "assembly",
+    "canonical",
+    "config",
+    "dataset",
+    "drugs",
+    "fit",
+    "genes",
+    "ids",
+    "inventory",
+    "io",
+    "labels",
+    "manifest",
+    "priors",
+    "registry",
+    "report",
+    "splits",
+    "tcga",
+    "validation",
+]

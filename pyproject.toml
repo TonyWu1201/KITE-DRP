@@ -35,7 +35,7 @@ authors = [
 # 许可证：尚未最终确定（MIT 或 Apache-2.0，见 README「许可证」与计划书附录 B.2-8）。
 # 发布/开源前必须补 LICENSE 文件并在此声明 SPDX 许可证。
 # license = { text = "MIT" }  # TODO(release): 选定后取消注释并添加 LICENSE
-requires-python = ">=3.12"
+requires-python = ">=3.12,<3.15"
 keywords = [
     "drug response prediction",
     "knowledge distillation",
@@ -76,6 +76,10 @@ dependencies = [
 # download.pytorch.org/whl/cu126，绝不要从 PyPI 默认索引装 torch（默认是 CPU 或别的 CUDA 版本）。
 # ---------------------------------------------------------------------------
 [project.optional-dependencies]
+# 数据准备：SMILES 下载（PubChem PUG-REST）
+data = [
+    "pubchempy>=1.0.5",
+]
 # 训练：单卡 3090 / 4060 Ti（计划书 §13.4）
 train = [
     "torch==2.14.1",
@@ -104,9 +108,10 @@ clinical = [
     "lifelines>=0.30",
     "scikit-survival>=0.28",
 ]
-# 组合 extra：一条命令装齐全部 GPU/部署/临床依赖（等价于上面 5 个 extra 的并集）。
+# 组合 extra：一条命令装齐全部数据/GPU/部署/临床依赖（等价于上面 6 个 extra 的并集）。
 # 注意：会下载 ~3–4 GB 的 cu126 torch 与 CUDA 运行库，纯 CPU 机器请勿使用。
 all = [
+    "pubchempy>=1.0.5",
     "torch==2.14.1",
     "torch-geometric==2.8.1",
     "rdkit>=2026.9",

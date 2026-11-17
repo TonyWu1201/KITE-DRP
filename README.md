@@ -129,7 +129,46 @@ git lfs ls-files     # 查看 LFS 跟踪文件
 ```
 
 数据卡与许可见 [`docs/data_cards/`](docs/data_cards/)、[`data/licenses/`](data/licenses/)；
+数据缺口与补数据顺序见 [`docs/data_gaps.md`](docs/data_gaps.md)；
 **公开 release 不打包受限数据**（TCGA 受控层、DrugBank 等），只提供下载脚本与派生特征。
+
+### 数据管线（G0）
+
+原始数据就位后，用统一 CLI 重建 canonical → splits → fit_stats → processed：
+
+```bash
+# 药物结构（scaffold/P3 需要）：PubChem → data/raw/drugs/smiles.tsv
+uv sync --extra data --extra graph
+.venv/bin/python scripts/download_smiles_pubchem.py
+
+# 先验资源（学生路线 A / 学生 mutation panel）
+.venv/bin/python scripts/download_pathways.py
+.venv/bin/python scripts/download_mutation_panel.py
+
+# P1 外部验证库（GDSC1 / CTRPv2 / PRISM）与 DTI 补充（Open Targets / ChEMBL）
+.venv/bin/python scripts/download_p1_external.py --only all
+.venv/bin/python -m kite_drp data external
+
+# TCGA file→case（联网一次；之后冻结）
+.venv/bin/python -m kite_drp data canonical --only tcga --fetch-file-index
+
+# 一键（离线 core profile；缺失资源自动降级并写报告）
+.venv/bin/python -m kite_drp data pipeline --profile core
+
+# 分步
+.venv/bin/python -m kite_drp data inventory
+.venv/bin/python -m kite_drp data canonical
+.venv/bin/python -m kite_drp data splits --all --seeds 0,1,2
+.venv/bin/python -m kite_drp data fit-stats
+.venv/bin/python -m kite_drp data build --stage all
+.venv/bin/python -m kite_drp data validate --all
+.venv/bin/python -m kite_drp data report
+.venv/bin/python -m kite_drp eval naive --split p1_lco_s0
+```
+
+产物层次：`data/interim/canonical/`（不提交，本地重建）、`data/processed/`（LFS，模型输入）、
+`data/splits/`（LFS，公开可复现）。质量报告写入 `data/interim/audit/quality_report.md`。
+**禁止先 z-score 再切分**：所有 fold 内统计量由 `src/kite_drp/data/fit.py` 的 `FitScope` 生成。
 
 ## 端侧部署（`deploy/`）
 

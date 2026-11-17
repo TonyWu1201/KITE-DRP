@@ -1,25 +1,103 @@
 # @package data
-# GDSC2 主训练集（计划书 §3.2 D11；标签方向约定见 §2.1）。
+# GDSC2 主训练集与组学预处理配置（规划 §8.3）。
+# 所有字段都有代码默认值；本文件是实验的显式口径，变更需走 docs/adr/。
 name: gdsc2
 role: primary
+
 label:
-  # 主标签：药物内 z-score 后的 LN_IC50
-  key: ln_ic50_zscore
+  # 化合物层键优先级：InChIKey > 标准化药名（D23）
+  compound_key: [inchikey, normalized_name]
+  # 双 DRUG_ID 合并主口径；敏感性口径 max_coverage 由报告脚本另算
+  dual_id_aggregation: mean
+  min_obs_per_compound: 30
+  target: neg_z_ln_ic50
+  classification_threshold: median
   # 方向约定：敏感分数 s = -z(LN_IC50)，越大越敏感
   sensitivity_sign: -1
-# 教师全组学 / 学生临床可及模态（§5.1、D2、D4）
+
+# 教师全组学 / 学生临床可及模态（§5.1、D2、D4；D21 将 METH 降级为可选）
 modalities:
-  teacher: [GE, MU, CNV, METH]
+  teacher: [GE, MU, CNV]
   student: [MU, GE]
-# 组学来源：CCLE/DepMap
+  methylation_optional: true
+
+# 组学来源：只使用 DepMap（D24）
 omics_source: depmap
+omics:
+  expression:
+    source: depmap
+    transform: identity          # 文件已是 log2(TPM+1)
+    drop_zero_variance: true
+  mutations:
+    teacher_filter: B             # D31：教师用 driver（LikelyLoF/Hotspot）
+    student_filter: A             # D31：学生 panel 用非沉默
+    mut_burden: integer_gene_count # 官方预筛后的突变基因数；不是 TMB
+  cnv:
+    transform: log2
+    clip_percentile: [0.1, 99.9]
+    vae_target_rule: ppi_cnv_teacher
+  methylation:
+    enabled: false               # D21：RRBS 仅 E2-METH 消融
+    platform: rrbs_tss1kb
+    min_coverage: 5.0
+
+genes:
+  universe: protein_coding
+  mapping_alias_policy: unique_only
+  # U_panel 兜底：非沉默突变携带率 >=1%，最多 500 基因（D27）
+  panel_min_frequency: 0.01
+  panel_max_genes: 500
+  # U_vae 占位维度；M4 与教师图交集后定稿（D26）
+  vae_size: 1600
+
+drug_features:
+  smiles_source: pubchem_then_chembl
+  morgan: {radius: 2, bits: 2048}
+  graph: {atom_features: ogb_77}
+  targets: {sources: [gdsc_target, opentargets, chembl, dgidb]}
+
+priors:
+  ppi:
+    version: v12.5
+    cutoff: 700
+    dedupe: undirected
+  pathways:
+    sources: [reactome, go]
+    min_genes: 10
+    max_genes: 500          # 剔除过大通路，控制端侧权重矩阵
+    max_pathways: 1000      # 按基因数降序截断；保证 500–1000 维学生输入
+    # 本地 GMT 路径（不存在时降级为路线 B）
+    files: []
+
+splits:
+  protocols: [p0_random, p1_lco, p2_ldo, p3_scaffold, p4_lto, lpo]
+  seeds: [0, 1, 2]
+  n_folds: 5
+  min_lineage_cells: 20
+
 # 原始文件（相对仓库根目录；raw 不提交 git，见 data/raw/README.md）
 raw_files:
   dose_response: data/raw/gdsc/GDSC2_fitted_dose_response_27Oct23.csv
-  compounds: data/raw/gdsc/screened_compounds_rel_8.4.csv
+  compounds: data/raw/gdsc/screened_compounds_rel_8.5_inchi.csv
+  cell_lines_details: data/raw/gdsc/Cell_Lines_Details.xlsx
   depmap_model: data/raw/depmap/Model.csv
   depmap_expression: data/raw/depmap/DepMap_ExpressionTPMLogp1HumanProteinCodingGenes.csv
   depmap_mutations: data/raw/depmap/DepMap_SomaticMutations.csv
   depmap_cnv: data/raw/depmap/DepMap_CNGeneWGS.csv
+  hgnc: data/raw/hgnc/Gene.csv
+  string_links: data/raw/string/9606.protein.links.v12.5.txt.gz
+  string_aliases: data/raw/string/9606.protein.aliases.v12.5.txt.gz
+  dgidb_interactions: data/raw/dgidb/interactions.tsv
+  opentargets_dir: data/raw/opentargets/26.09
+  chembl_dir: data/raw/chembl/37
+  ccle_methylation: data/raw/ccle/CCLE_DNA_methylation_TSS1kb.txt
+  tcga_file_index: data/interim/tcga/file_index.parquet
+  # 可选：外部 panel 清单（纯文本/CSV，每行一个基因）
+  mutation_panel: data/raw/panel/IMPACT468.txt
+
+local_files:
+  # 可选：本地 SMILES 表（compound_uid/inchikey/drug_name,smiles）
+  drug_smiles: data/raw/drugs/smiles.tsv
+
 # 外部验证顺序（§3.2 D12）：CTRPv2 → GDSC1→GDSC2 零样本 → PRISM → TCGA 子集
 external_validation: [ctrpv2, gdsc1]

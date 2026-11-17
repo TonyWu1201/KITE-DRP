@@ -62,6 +62,11 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("doctor", help="运行环境自检（scripts/check_env.py）").set_defaults(
         func=_cmd_doctor
     )
+    from kite_drp.data.cli import register as register_data
+    from kite_drp.eval.cli import register as register_eval
+
+    register_data(sub)
+    register_eval(sub)
     return parser
 
 

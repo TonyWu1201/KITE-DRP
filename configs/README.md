@@ -9,8 +9,19 @@
 | 组 | 目录 | 说明 | 计划书 |
 |---|---|---|---|
 | `paths` | `paths/` | 仓库内相对路径（唯一路径来源） | §3.8、附录 B |
-| `data` | `data/` | 数据集、标签方向、教师/学生模态集合 | §3、§5.1 |
-| `split` | `split/` | LCO/LDO/scaffold 等划分协议 | §7.2 |
+| `data` | `data/` | 数据集、标签方向、教师/学生模态集合、组学/先验口径 | §3、§5.1 |
+| `split` | `split/` | P0–P4/LPO 划分协议 | §7.2 |
+
+数据管线入口（不依赖 Hydra，可直接运行）：
+
+```bash
+.venv/bin/python -m kite_drp data canonical --config configs/data/gdsc2.yaml
+.venv/bin/python -m kite_drp data splits --all --seeds 0,1,2
+.venv/bin/python -m kite_drp data fit-stats
+```
+
+`configs/data/student.yaml` 与 `configs/data/tcga.yaml` 是数据侧子配置（学生输入/TCGA 评估），
+当前由 `data.cli` 的默认值与 `configs/data/gdsc2.yaml` 合并使用。
 | `teacher` | `teacher/` | B0/T0/T1 教师结构与规模 | §4 |
 | `student` | `student/` | A/B/S-latent 学生结构与参数预算 | §5.4–5.5 |
 | `kd` | `kd/` | 四层蒸馏信号与权重（解释蒸馏默认关闭） | §6.2 |

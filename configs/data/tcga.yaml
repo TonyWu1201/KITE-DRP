@@ -1,0 +1,22 @@
+# @package data
+# TCGA-CESC 评估侧配置（规划 §4.9、D29）。
+tcga:
+  cohort: CESC
+  purpose: eval
+  modalities: [MU, GE, CNV]          # METH 本期只做统计
+  sample_types_main: [01A, 01B]      # 原发实体瘤；06A 转移灶单独标记
+  file_index: data/interim/tcga/file_index.parquet
+  raw_root: data/raw/tcga
+  endpoints:
+    primary: PFI
+    sensitivity: OS
+    dfi_subset: true
+  ding2016:
+    drug: Cisplatin
+    response_positive: [Complete Response, Partial Response]
+    response_negative: [Clinical Progressive Disease, Stable Disease]
+  cnv_qc:
+    normal_like_cn2_fraction: 0.90
+  methylation:
+    enabled: false
+    platform: HM450

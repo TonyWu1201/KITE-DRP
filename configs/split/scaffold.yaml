@@ -1,0 +1,8 @@
+# @package split
+# 药物 scaffold 划分；SMILES/RDKit 缺失时自动降级为 target-family（报告标注）。
+protocol: p3_scaffold
+level: compound
+n_folds: 5
+seed: 0
+group_key: scaffold
+degrade_to: target_family

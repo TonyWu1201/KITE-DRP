@@ -1,0 +1,7 @@
+# @package split
+protocol: p4_lto
+level: cell_line
+n_folds: 9
+seed: 0
+group_key: oncotree_lineage
+min_lineage_cells: 20
