@@ -1,0 +1,7 @@
+# @package split
+# leave-pairs-out：仅用于补全/插补评估，不用于泛化结论。
+protocol: lpo
+level: pair
+n_folds: 5
+seed: 0
+group_key: observed_pair

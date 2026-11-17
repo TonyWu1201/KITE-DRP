@@ -1,0 +1,21 @@
+# @package data
+# 学生输入配置（规划 §4.2/§4.3、D25/D27）。
+student:
+  expression_route: pathway_mean_z    # pathway_mean_z（A，默认）| hvg（B 对照）
+  pathway:
+    sources: [reactome, go]
+    min_genes_per_pathway: 10
+    scoring: mean_z
+  hvg:
+    n_top: 2000
+    fallback_when_pathway_missing: true
+  mutation_panel:
+    source: external_then_frequency
+    filter: A
+    frequency_min: 0.01
+    max_genes: 500
+  mut_burden:
+    definition: integer_mutated_gene_count
+    note: 官方预筛后的突变基因数，不是 TMB，不可与真实 TMB 比较
+  quantize:
+    pathway_weights_dtype: float16

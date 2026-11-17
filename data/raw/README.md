@@ -65,16 +65,16 @@ data/raw/
 | ccle | `CCLE_DNA_methylation_TSS1kb.txt` | 142 MB | 21,338 TSS × 843 列（**RRBS，非 450K**，2018 年版） | 教师 METH（可选）/VAE METH 头（D2/D5） | CCLE（旧资源） |
 | ccle | `Cell_lines_annotations_20181226.txt` | 0.3 MB | 1,461 行，非权威 | 旧名称映射 fallback（正式管线用 Model.csv） | CCLE（旧资源） |
 | hgnc | `Gene.csv` | 17 MB | 44,083 行（19,291 蛋白编码；`date_modified` 最晚 2025-03-31） | 基因 ID 三层映射（§3.3-1） | HGNC（引用） |
-| string | `9606.protein.links.v12.5.txt.gz` | 62.8 MB | v12.5；10,826,054 边/19,649 蛋白 | **PPI 主版本**（A_GG，§4.4） | **CC BY 4.0**（仅需署名） |
+| string | `9606.protein.links.v12.5.txt.gz` | 62.8 MB | v12.5；10,826,054 行 / 5,413,027 唯一无向边 / 19,649 蛋白 | **PPI 主版本**（A_GG，§4.4） | **CC BY 4.0**（仅需署名） |
 | string | `9606.protein.aliases.v12.5.txt.gz` | 19.8 MB | v12.5；3,889,207 行 | ENSP↔symbol 映射 | CC BY 4.0 |
 | string | `9606.protein.links.v12.0.txt` | 630.9 MB | v12.0（2023） | 旧版本留档/对照 | CC BY 4.0 |
 | string | `9606.protein.aliases.v12.0.txt` | 199.7 MB | v12.0 | 旧版本留档/对照 | CC BY 4.0 |
 | dgidb | `interactions.tsv` | 19.3 MB | DGIdb v5.0.13，data 2026-10；122,905 条 claim | E11 解释命中率校验 + A_DG 兜底（§4.6） | DGIdb（混合来源，再分发受限，内部研究用） |
 | dgidb | `drugs.tsv` / `genes.tsv` / `categories.tsv` | 14.7 MB | 同上（80,483 / 85,738 / 33,890 行） | 药/基因/类别映射 | 同上 |
 | tcga | `CESC/`（1,204 文件） | 6.421 GB | GDC Data Release 46.0；ascat3-only CNV | L1/L2/L3（§3.7、§8） | GDC 开放层（NIH open access） |
-| tcga | `clinical/clinical.project-tcga-cesc.2026-11-11.tar.gz` | 363 KB | GDC Portal 2026-11-11 导出；207 列、1,454 行/307 例 | L2 治疗记录/L2′ 协变量（§8.4） | GDC 开放层 |
+| tcga | `clinical/clinical.project-tcga-cesc.2026-11-11.tar.gz` | 363 KB | GDC Portal 2026-11-11 导出；202 列、1,454 行/307 例 | L2 治疗记录/L2′ 协变量（§8.4） | GDC 开放层 |
 | tcga | `cdr/TCGA-CDR-SupplementalTableS1.xlsx` | 2.9 MB | PanCan-Clinical-2018；11,160 例/33 癌种 | L2′ 生存终点（OS/PFI/DFI/DSS） | 引用 Liu et al. 2018 |
-| tcga | `ding2016/bioinformatics_32_19_2891_s1.zip` | 1.8 MB | Ding, Zu & Gu 2016 补充材料；Table S2=2,573 条响应记录 | **L2 唯一响应标签源**（§8.4a） | 引用原文；标签为 TCGA 自由文本再整理 |
+| tcga | `ding2016/bioinformatics_32_19_2891_s1.zip` | 1.8 MB | Ding, Zu & Gu 2016 补充材料；Table S2=2,572 条响应记录 | **L2 唯一响应标签源**（§8.4a） | 引用原文；标签为 TCGA 自由文本再整理 |
 | tcga | `manifests/`（7 个 tsv + 源 manifest + README + 下载命令） | 3.4 MB | GDC 2026-11-11 导出/筛选 | 下载可复现/完整性校验 | — |
 
 > **许可统一说明**：以上许可为当前已知信息；完整许可说明与引用要求待建 `data/licenses/`（计划书 §3.4/§3.8、审计缺口 P0-结构件）。开源仓库只发布派生特征与下载脚本，不打包 STRING/KEGG/DrugBank/TCGA 受控层等受限数据。
@@ -110,7 +110,7 @@ data/raw/
 1. **GDSC2 药身份**：按 (细胞系, DRUG_ID) 无重复，但 **9 个化合物各有 2 个 DRUG_ID**（6,288 个名称级重复对），去重必须在化合物层（InChIKey/药名）而非曲线层；295 ID vs 286 药名口径需冻结。
 2. **DepMap 版本混用风险**：组学文件无 release 标签（mtime 2026-07-13，疑 26Q1 代），`Model.csv` 为 2026-11-10（疑 26Q3）→ 需定版并记录 MD5（P1）。`SIDM00117` 有 1→2 映射碰撞，用 COSMICID=905967 → ACH-002172 仲裁。
 3. **METH 平台**：CCLE 为 **RRBS TSS1kb（2018）**，非计划书的 450K；且 843 列中 10 列整列全空。与 TCGA HM450 跨平台，L1 建议默认只补 CNV。
-4. **CNV 格式**：DepMap 为 WGS **线性相对拷贝数**（非 log2，约 4% 缺失）；TCGA ascat3 为**整数总拷贝数**（0–104，1.3% 缺失）——两者需 log2/离散化对齐。
+4. **CNV 格式**：DepMap 为 WGS **线性相对拷贝数**（非 log2，约 4% 缺失）；TCGA ascat3 为**整数总拷贝数**（0–111，1.3% 缺失）——两者需 log2/离散化对齐。
 5. **TCGA-CESC 下载结构**：每个文件一个 `<file_uuid>/` 目录（内含数据文件 + `logs/` + `.parcel`；部分含 `annotations.txt`）。`logs/`、`.parcel`、`annotations.txt` 不是数据；**文件名不含 TCGA barcode**，L1/L2/L3 前必须用 GDC API 生成 file_id→case 映射派生表（见审计 P0-5）。CNV/MU 的 `associated_entities` 指向 10A 正常样本，**不能**用于判 sample_type。
 6. **TCGA 四模态**：CESC 下载集（ascat3-only）四模态交集 **274 例**（补非 ascat3 CNV 可到 281）；METH 单样本 ~14.9% NA；GE 为 GENCODE v36 versioned Ensembl ID。
 7. **Ding 2016 标签 provenance**：TCGA 自由文本治疗结局的再整理（非独立 RECIST 复核）；CESC 顺铂可用 **59 例（62 条）**，不是治疗记录数 128；使用前需标签 QC。

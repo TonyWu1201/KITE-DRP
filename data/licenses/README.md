@@ -18,6 +18,8 @@
 | Ding, Zu & Gu 2016 | `data/raw/tcga/ding2016/` | 引用原文；为人工整理的响应标签，非 TCGA 官方药敏数据 | ✅ 已知 |
 | CTRPv2 / PRISM / GDSC1 外部验证 | 未下载 | 各自学术条款，下载前补数据卡与许可说明 | ⏳ 未开始 |
 
+> 逐源文件：`gdsc2.md`、`depmap.md`、`string.md`、`hgnc.md`、`dgidb.md`、`tcga.md`、`tcga_cdr.md`、`ding2016.md`。
+
 > 更细的文件清单与版本信息见 [`../raw/README.md`](../raw/README.md)（原始数据索引入口）。
 
 ## 模板

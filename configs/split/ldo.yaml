@@ -1,0 +1,7 @@
+# @package split
+protocol: p2_ldo
+level: compound
+n_folds: 5
+seed: 0
+group_key: compound_uid
+bias_check: true
