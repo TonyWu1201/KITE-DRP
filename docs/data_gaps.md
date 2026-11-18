@@ -22,6 +22,16 @@
 当前 processed：M-716 教师输入、M-509 主评估子集、1,000 通路路线 A、462 基因学生 panel、
 260 例 TCGA GE+CNV+MU 评估集、18 splits × 3 seeds、90 fold fit-stats。
 
+**2026-11-18 自包含补全（ADR-0005）**：
+
+| 产物 | 内容 | 作用 |
+|---|---|---|
+| `teacher_pairs.parquet` | 235,478 行 pair 表（教师池 176,487 / 主池 126,803） | clone 后无需 canonical 标签 |
+| `graph_inputs.npz` | 16,197 基因 / 253,279 PPI / 4,395 DTI 边 | T1 建图不依赖 canonical |
+| `drug_features.npz` 分子图 | 286/286 药，77 维原子 + 4 维键，8,458 原子 / 18,422 双向边 | GIN 可训练 |
+
+自检入口：`uv run python -m kite_drp data preflight --target teacher`（T1 用 `teacher_t1`）。
+
 ## 2. 补数清单（按优先级）
 
 > 2026-11-17 更新：P1 五项已全部落盘（见下方“P1 补数结果”）；P2 仍为可选/后续里程碑。

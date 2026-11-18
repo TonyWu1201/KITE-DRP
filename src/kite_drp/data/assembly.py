@@ -9,7 +9,9 @@ import numpy as np
 import pandas as pd
 
 from kite_drp.data import io, registry
+from kite_drp.data.graph_inputs import build_graph_inputs
 from kite_drp.data.manifest import Manifest, code_hash, config_hash
+from kite_drp.data.pairs import build_teacher_pairs
 
 
 def _load_universes(canonical: Path) -> dict[str, Any]:
@@ -300,11 +302,26 @@ def build_processed(
     processed.mkdir(parents=True, exist_ok=True)
     from kite_drp.data.drug_assembly import build_drug_inputs
 
-    result: dict[str, Any] = {"teacher": None, "drug": None, "student": None, "vae": None, "tcga": None}
+    result: dict[str, Any] = {
+        "teacher": None,
+        "drug": None,
+        "pairs": None,
+        "graph": None,
+        "student": None,
+        "vae": None,
+        "tcga": None,
+    }
     if stage in {"all", "teacher", "drug"}:
         result["drug"] = build_drug_inputs(canonical, processed)
     if stage in {"all", "teacher"}:
         result["teacher"] = build_teacher_inputs(canonical, processed)
+    if stage in {"all", "teacher", "pairs"}:
+        result["pairs"] = build_teacher_pairs(canonical, processed)
+    if stage in {"all", "teacher", "graph"}:
+        try:
+            result["graph"] = build_graph_inputs(canonical, processed)
+        except FileNotFoundError as exc:
+            result["graph"] = {"status": "skipped", "reason": str(exc)}
     if stage in {"all", "student"}:
         result["student"] = build_student_inputs(canonical, processed)
     if stage in {"all", "vae"}:
@@ -317,6 +334,8 @@ def build_processed(
     for name in [
         "teacher_inputs",
         "teacher_index",
+        "teacher_pairs",
+        "graph_inputs",
         "pool_index",
         "drug_features_processed",
         "compounds_processed",
@@ -342,9 +361,11 @@ def build_processed(
 
 
 __all__ = [
+    "build_graph_inputs",
     "build_processed",
     "build_student_inputs",
     "build_teacher_inputs",
+    "build_teacher_pairs",
     "build_tcga_inputs",
     "build_vae_target",
 ]

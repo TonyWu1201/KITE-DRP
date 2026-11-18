@@ -32,7 +32,15 @@ def test_data_help_lists_pipeline_commands(capsys: pytest.CaptureFixture[str]) -
         main(["data", "--help"])
     assert excinfo.value.code == 0
     out = capsys.readouterr().out
-    for command in ("inventory", "canonical", "splits", "fit-stats", "build", "validate"):
+    for command in (
+        "inventory",
+        "canonical",
+        "splits",
+        "fit-stats",
+        "build",
+        "validate",
+        "preflight",
+    ):
         assert command in out
 
 

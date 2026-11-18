@@ -14,6 +14,8 @@ import numpy as np
 import pandas as pd
 
 from kite_drp.data import io
+from kite_drp.data.pairs import load_pairs, sensitivity_class, sensitivity_labels
+from kite_drp.data.splits import fold_masks, load_split
 
 try:  # pragma: no cover - 可选依赖
     from torch.utils.data import Dataset as _TorchDataset
@@ -171,10 +173,156 @@ class StudentDataset(_BASE):  # type: ignore[misc]
         }
 
 
+@dataclass
+class DrugFeatureStore:
+    """`processed/drug_features.npz` 的只读视图（含 GIN 分子图 ragged 数组）。"""
+
+    compound_uid: list[str]
+    morgan: np.ndarray
+    targets: np.ndarray
+    target_genes: list[str]
+    smiles: list[str]
+    has_smiles: np.ndarray
+    scaffold: list[str]
+    graph_atom_ptr: np.ndarray | None = None
+    graph_edge_ptr: np.ndarray | None = None
+    graph_node_feat: np.ndarray | None = None
+    graph_edge_index: np.ndarray | None = None
+    graph_edge_feat: np.ndarray | None = None
+    graph_has_graph: np.ndarray | None = None
+
+    @classmethod
+    def load(cls, processed_dir: str | Path) -> DrugFeatureStore:
+        path = Path(processed_dir) / "drug_features.npz"
+        if not path.is_file():
+            raise FileNotFoundError(
+                f"缺少 {path}；请运行 `kite-drp data build --stage drug`"
+            )
+        arrays = io.read_npz(path)
+        return cls(
+            compound_uid=[str(value) for value in arrays["compound_uid"]],
+            morgan=arrays["morgan"],
+            targets=arrays["targets"],
+            target_genes=[str(value) for value in arrays["target_genes"]],
+            smiles=[str(value) for value in arrays["smiles"]],
+            has_smiles=arrays["has_smiles"].astype(bool),
+            scaffold=[str(value) for value in arrays["scaffold"]],
+            graph_atom_ptr=arrays.get("graph_atom_ptr"),
+            graph_edge_ptr=arrays.get("graph_edge_ptr"),
+            graph_node_feat=arrays.get("graph_node_feat"),
+            graph_edge_index=arrays.get("graph_edge_index"),
+            graph_edge_feat=arrays.get("graph_edge_feat"),
+            graph_has_graph=(
+                arrays["graph_has_graph"].astype(bool)
+                if "graph_has_graph" in arrays
+                else None
+            ),
+        )
+
+    @property
+    def index(self) -> dict[str, int]:
+        return {uid: position for position, uid in enumerate(self.compound_uid)}
+
+    @property
+    def has_molecular_graphs(self) -> bool:
+        return self.graph_has_graph is not None and bool(self.graph_has_graph.any())
+
+
+class TeacherPairDataset(_BASE):  # type: ignore[misc]
+    """教师 pair 数据集：只读 processed + splits + fit_stats（不碰 canonical）。
+
+    这是「clone 下来也能训练」的入口：``teacher_pairs.parquet`` 提供标签，
+    ``teacher_inputs.npz`` 提供细胞系组学，``drug_features.npz`` 提供药物特征，
+    ``fit_stats`` 提供 fold 内标签/组学统计量。
+    """
+
+    def __init__(
+        self,
+        processed_dir: str | Path,
+        *,
+        split_id: str,
+        fold: int,
+        pool: str = "M-716",
+        split_dir: str | Path | None = None,
+        fit_stats_root: str | Path | None = None,
+    ) -> None:
+        self.processed_dir = Path(processed_dir)
+        pairs = load_pairs(self.processed_dir)
+        if pool == "M-509":
+            pairs = pairs[pairs["in_main_pool"].astype(bool)]
+        else:
+            pairs = pairs[pairs["has_teacher_omics"].astype(bool)]
+        self.all_pairs = pairs.reset_index(drop=True)
+
+        root = Path(fit_stats_root or self.processed_dir / "fit_stats")
+        self.fit_stats = FitStats.load(root / split_id / f"fold{fold}")
+        self.split_id = split_id
+        self.fold = int(fold)
+        self.pool = pool
+
+        splits_dir = Path(split_dir or Path(self.processed_dir).parent / "splits")
+        split_path = splits_dir / f"{split_id}.json"
+        if not split_path.is_file():
+            raise FileNotFoundError(f"缺少 split 文件：{split_path}")
+        self.split = load_split(split_path)
+        fold_def = next(
+            (item for item in self.split["folds"] if int(item["fold"]) == int(fold)),
+            None,
+        )
+        if fold_def is None:
+            raise KeyError(f"split {split_id} 缺少 fold {fold}")
+        fold_def = dict(fold_def)
+        fold_def["_seed"] = self.split["seed"]
+        masks = fold_masks(fold_def, self.all_pairs, self.split["protocol"])
+        self.split_label = np.full(len(self.all_pairs), "unused", dtype=object)
+        for name in ("train", "val", "test"):
+            self.split_label[masks[name].to_numpy()] = name
+
+        # 细胞/药物索引（与 teacher_inputs / drug_features 行对齐）
+        teacher = io.read_npz(self.processed_dir / "teacher_inputs.npz")
+        cell_uids = [str(value) for value in teacher["cell_line_uid"]]
+        self.cell_index = {uid: position for position, uid in enumerate(cell_uids)}
+        drugs = DrugFeatureStore.load(self.processed_dir)
+        self.drug_store = drugs
+        self.drug_index = drugs.index
+
+        keep = self.all_pairs["cell_line_uid"].isin(self.cell_index).to_numpy(dtype=bool)
+        keep = keep & self.all_pairs["compound_uid"].isin(self.drug_index).to_numpy(dtype=bool)
+        if not keep.any():
+            raise ValueError("pair 表与 teacher_inputs/drug_features 无交集")
+        self.pairs = self.all_pairs.loc[keep].reset_index(drop=True)
+        self.split_label = self.split_label[keep]
+
+        self.y = sensitivity_labels(self.pairs, self.fit_stats.label_scaler)
+        y_cls, cls_mask = sensitivity_class(self.pairs, self.fit_stats.label_scaler)
+        self.y_cls = y_cls
+        self.cls_mask = cls_mask
+        self.cell_idx = self.pairs["cell_line_uid"].map(self.cell_index).to_numpy(dtype=np.int64)
+        self.drug_idx = self.pairs["compound_uid"].map(self.drug_index).to_numpy(dtype=np.int64)
+
+    def __len__(self) -> int:
+        return len(self.pairs)
+
+    def indices(self, split: str) -> np.ndarray:
+        if split == "all":
+            return np.arange(len(self.pairs), dtype=np.int64)
+        return np.flatnonzero(self.split_label == split)
+
+    def __getitem__(self, index: int) -> dict[str, Any]:
+        return {
+            "cell_line_uid": str(self.pairs.at[index, "cell_line_uid"]),
+            "compound_uid": str(self.pairs.at[index, "compound_uid"]),
+            "cell_idx": int(self.cell_idx[index]),
+            "drug_idx": int(self.drug_idx[index]),
+            "y": float(self.y[index]),
+            "y_cls": float(self.y_cls[index]),
+            "cls_mask": bool(self.cls_mask[index]),
+            "split": str(self.split_label[index]),
+        }
+
+
 class TcgaEvalDataset(_BASE):  # type: ignore[misc]
     """TCGA 评估集（purpose=eval 红线；训练侧禁止加载）。"""
-
-    purpose = "eval"
 
     def __init__(self, mu_path: str | Path, *, patient_ids: list[str] | None = None) -> None:
         matrix, rows, genes = io.load_packed_matrix(mu_path, name="matrix")
@@ -194,4 +342,11 @@ class TcgaEvalDataset(_BASE):  # type: ignore[misc]
         return {"patient_id": self.patient_ids[index], "mu": self.mu[index]}
 
 
-__all__ = ["FitStats", "StudentDataset", "TcgaEvalDataset", "TeacherDataset"]
+__all__ = [
+    "DrugFeatureStore",
+    "FitStats",
+    "StudentDataset",
+    "TcgaEvalDataset",
+    "TeacherDataset",
+    "TeacherPairDataset",
+]

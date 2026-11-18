@@ -220,6 +220,20 @@ def cmd_validate(args: argparse.Namespace) -> int:
     return 0 if result["status"] == "ok" else 1
 
 
+def cmd_preflight(args: argparse.Namespace) -> int:
+    from kite_drp.data.preflight import run_preflight
+
+    paths = _paths()
+    result = run_preflight(
+        processed_dir=paths.processed,
+        splits_dir=paths.splits,
+        target=args.target,
+        split_id=args.split,
+    )
+    print(json.dumps(result, ensure_ascii=False, indent=2, default=str))
+    return 0 if result["status"] == "ok" else 1
+
+
 def cmd_report(args: argparse.Namespace) -> int:
     from kite_drp.data.report import build_report
 
@@ -343,7 +357,7 @@ def register(subparsers: argparse._SubParsersAction) -> None:  # type: ignore[ty
     p.add_argument("--config", type=str, default=None)
     p.add_argument(
         "--stage",
-        choices=["all", "teacher", "drug", "student", "vae", "tcga"],
+        choices=["all", "teacher", "drug", "pairs", "graph", "student", "vae", "tcga"],
         default="all",
     )
     p.set_defaults(func=cmd_build)
@@ -353,6 +367,11 @@ def register(subparsers: argparse._SubParsersAction) -> None:  # type: ignore[ty
     p.add_argument("--strict", action="store_true")
     p.add_argument("--no-leakage", action="store_true")
     p.set_defaults(func=cmd_validate)
+
+    p = data_sub.add_parser("preflight", help="训练前置检查（clone 无 canonical 也能跑）")
+    p.add_argument("--target", choices=["teacher", "teacher_t1", "all"], default="teacher")
+    p.add_argument("--split", type=str, default="p1_lco_s0")
+    p.set_defaults(func=cmd_preflight)
 
     p = data_sub.add_parser("external", help="构建 P5 外部验证库（GDSC1/CTRPv2/PRISM）")
     p.set_defaults(func=cmd_external)

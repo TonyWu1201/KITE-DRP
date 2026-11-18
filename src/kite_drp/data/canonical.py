@@ -144,6 +144,8 @@ def build_canonical(
 
     if only in {"tcga"}:
         return _build_tcga_only(config, paths, result, fetch_file_index=fetch_file_index)
+    if only in {"drug_features"}:
+        return _build_drug_features_only(config, paths, result)
 
     # ------------------------------------------------------------------
     # 1. 基因真源与三个组学矩阵
@@ -619,6 +621,65 @@ def _build_tcga_offline(
         io.write_parquet(ding, paths.interim / "canonical" / "tcga_ding2016.parquet")
         stats["ding2016"] = info
     return stats
+
+
+def _build_drug_features_only(
+    config: dict[str, Any],
+    paths: DataPaths,
+    result: dict[str, Any],
+) -> dict[str, Any]:
+    """只重建 canonical 药物特征（SMILES/Morgan/分子图/targets/scaffold）。
+
+    用于给已冻结的 canonical 补字段，避免重跑全量组学（约 15 min）。输入只读
+    ``compounds.parquet`` 与 ``gene_universes.json``，不依赖 raw 大文件。
+    """
+    from kite_drp.data.manifest import Manifest
+
+    compounds_path = paths.canonical / "compounds.parquet"
+    universe_path = paths.canonical / "gene_universes.json"
+    if not compounds_path.is_file() or not universe_path.is_file():
+        raise FileNotFoundError(
+            f"缺少 canonical 输入：{compounds_path} / {universe_path}；请先跑 data canonical"
+        )
+    compounds = io.read_parquet(compounds_path)
+    universes = io.read_json(universe_path)
+    arrays, coverage = build_drug_features(
+        compounds,
+        smiles_path=config.get("local_files", {}).get("drug_smiles"),
+        target_genes=universes["teach_ge"],
+        radius=int(config.get("drug_features", {}).get("morgan", {}).get("radius", 2)),
+        bits=int(config.get("drug_features", {}).get("morgan", {}).get("bits", 2048)),
+    )
+    io.write_npz(paths.canonical / "drug_features.npz", arrays)
+    io.write_json(paths.canonical / "drug_feature_coverage.json", coverage)
+    compounds["smiles"] = [value if value else None for value in arrays["smiles"].tolist()]
+    compounds["scaffold"] = [value if value else None for value in arrays["scaffold"].tolist()]
+    compounds["has_smiles"] = compounds["smiles"].notna()
+    compounds["has_scaffold"] = compounds["scaffold"].notna()
+    io.write_parquet(compounds, compounds_path)
+
+    manifest = Manifest(paths.canonical / "manifest.json")
+    manifest.register("drug_features", paths.canonical / "drug_features.npz", layer="canonical")
+    manifest.register("compounds", compounds_path, layer="canonical", df=compounds)
+    manifest.register(
+        "drug_feature_coverage.json",
+        paths.canonical / "drug_feature_coverage.json",
+        layer="canonical",
+    )
+    manifest.artifacts.pop("drug_coverage", None)
+    manifest.save(extra={"partial_rebuild": "drug_features"})
+
+    result["artifacts"].extend(
+        [str(paths.canonical / "drug_features.npz"), str(compounds_path)]
+    )
+    result["stats"]["drug_features"] = coverage
+    if not coverage["rdkit_available"]:
+        result["warnings"].append("RDKit 未安装：分子图/Morgan/scaffold 降级为空 + mask。")
+    if coverage["graphs"]["coverage"] < 1.0:
+        result["warnings"].append(
+            f"分子图覆盖 {coverage['graphs']['n_graphs']}/{coverage['n_compounds']}"
+        )
+    return result
 
 
 def _build_tcga_only(

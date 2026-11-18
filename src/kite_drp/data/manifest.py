@@ -23,6 +23,36 @@ from kite_drp.data import io
 from kite_drp.data.io import canonical_json, hash_dataframe, hash_file, hash_ndarray
 
 
+def _portable_path(path: str | Path) -> str:
+    """仓库内路径 → 相对 POSIX 字符串；仓库外保持绝对路径。"""
+    target = Path(path).resolve()
+    try:
+        return target.relative_to(REPO_ROOT.resolve()).as_posix()
+    except ValueError:
+        return str(target)
+
+
+def _normalize_path(value: str | Path) -> Path:
+    """把 manifest 中的路径解析为当前机器可用的路径。
+
+    - 相对路径：相对仓库根；
+    - 绝对路径且存在：原样使用；
+    - 绝对路径但不存在（来自另一台机器）：截取 ``data/`` 起的后缀重新定位。
+    """
+    path = Path(str(value))
+    if not path.is_absolute():
+        return REPO_ROOT / path
+    if path.exists():
+        return path
+    parts = path.parts
+    if "data" in parts:
+        index = len(parts) - 1 - parts[::-1].index("data")
+        candidate = REPO_ROOT.joinpath(*parts[index:])
+        if candidate.exists():
+            return candidate
+    return path
+
+
 # ---------------------------------------------------------------------------
 # 代码 / 配置指纹
 # ---------------------------------------------------------------------------
@@ -138,7 +168,11 @@ class ArtifactEntry:
 
 
 class Manifest:
-    """``manifest.json`` 的读写与增量校验。"""
+    """``manifest.json`` 的读写与增量校验。
+
+    路径以仓库相对路径（POSIX）落盘，保证 clone/迁移到其他机器后仍可校验；
+    读取旧 manifest（绝对路径来自另一台机器）时按 ``data/`` 后缀自动重定位。
+    """
 
     def __init__(self, path: str | Path, *, schema_version: str = "1.0") -> None:
         self.path = Path(path)
@@ -150,6 +184,8 @@ class Manifest:
             self.schema_version = payload.get("schema_version", schema_version)
             self.meta = payload.get("meta", {})
             for entry in payload.get("artifacts", []):
+                entry = dict(entry)
+                entry["path"] = _portable_path(_normalize_path(entry.get("path", "")))
                 self.artifacts[entry["name"]] = entry
 
     def register(
@@ -174,7 +210,7 @@ class Manifest:
             semantic = artifact_hash(name, array=array)
         entry = ArtifactEntry(
             name=name,
-            path=str(target),
+            path=_portable_path(target),
             layer=layer,
             sha256=hash_file(target),
             size=target.stat().st_size,
@@ -194,7 +230,7 @@ class Manifest:
         entry = self.artifacts.get(name)
         if not entry:
             return False
-        target = Path(entry.get("path", ""))
+        target = _normalize_path(entry.get("path", ""))
         return (
             target.is_file()
             and entry.get("code_hash") == code
@@ -219,7 +255,7 @@ class Manifest:
         """返回校验失败项（路径缺失或内容 hash 不匹配）。"""
         problems: list[str] = []
         for name, entry in sorted(self.artifacts.items()):
-            target = Path(entry.get("path", ""))
+            target = _normalize_path(entry.get("path", ""))
             if not target.is_file():
                 problems.append(f"{name}: missing {target}")
                 continue

@@ -169,6 +169,20 @@ ARTIFACTS: dict[str, ArtifactSpec] = {
     "teacher_index": ArtifactSpec(
         "teacher_index", "data/processed/teacher_index.json", "processed", "data.assembly"
     ),
+    "teacher_pairs": ArtifactSpec(
+        "teacher_pairs",
+        "data/processed/teacher_pairs.parquet",
+        "processed",
+        "data.pairs",
+        description="药敏 pair 表（含教师池标记；训练侧唯一标签来源）",
+    ),
+    "graph_inputs": ArtifactSpec(
+        "graph_inputs",
+        "data/processed/graph_inputs.npz",
+        "processed",
+        "data.graph_inputs",
+        description="T1 图输入：PPI/DTI 边表 + 基因/化合物节点表",
+    ),
     "pool_index": ArtifactSpec(
         "pool_index", "data/processed/pool_index.json", "processed", "data.assembly"
     ),

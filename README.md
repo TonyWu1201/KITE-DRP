@@ -163,8 +163,14 @@ uv sync --extra data --extra graph
 .venv/bin/python -m kite_drp data build --stage all
 .venv/bin/python -m kite_drp data validate --all
 .venv/bin/python -m kite_drp data report
+.venv/bin/python -m kite_drp data preflight --target teacher   # clone 后自检（不读 canonical）
 .venv/bin/python -m kite_drp eval naive --split p1_lco_s0
 ```
+
+**Clone 即训**：`git clone && git lfs pull` 后，`data/processed/` 已包含
+`teacher_pairs.parquet`（标签）、`teacher_inputs.npz`（组学）、`drug_features.npz`（含分子图）
+与 `graph_inputs.npz`（PPI/DTI），教师训练无需 `data/raw/` 或 `data/interim/canonical/`；
+用 `kite-drp data preflight --target teacher`（T1 用 `teacher_t1`）确认。
 
 产物层次：`data/interim/canonical/`（不提交，本地重建）、`data/processed/`（LFS，模型输入）、
 `data/splits/`（LFS，公开可复现）。质量报告写入 `data/interim/audit/quality_report.md`。
