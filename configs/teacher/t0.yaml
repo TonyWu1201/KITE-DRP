@@ -1,15 +1,30 @@
 # @package teacher
-# T0 多模态交叉注意力教师（必做；§4.3）。对照 B0 双线性基线（b0.yaml）与
-# T1 异构图主教师（t1.yaml）。
+# T0 多模态交叉注意力教师（必做；§4.3）。对照 B0 双线性基线（b0.yaml）。
 name: t0
 kind: cross_attention
-# 药物表示：GIN 分子图 + Morgan 指纹 + 靶点基因（§4.2 D3）
-drug_encoder: gin_morgan_targets
+# 药物表示：Morgan FP + 靶点基因；GIN 分子图默认关闭（E-drug 消融时打开）
+drug_encoder: morgan_targets
+use_gin: false
+# 靶点基因嵌入维度（18,396 × 16 ≈ 0.29M）
+target_embed_dim: 16
 d_model: 256
 n_heads: 4
 n_layers: 2
 dropout: 0.1
-# 教师输入模态（全组学；D2）
-modalities: [GE, MU, CNV, METH]
+# 每个模态保留 [CLS] + top-k 通路 token（控制序列长度；k=64）
+top_k: 64
+# 相似性邻居 token（H3CDR 式；可学习 gate，初始 sigmoid(0)=0.5）
+use_neighbor: true
+modality_dropout: 0.05
+# T0 训练口径（覆盖 configs/train/teacher.yaml 的 lr/wd）
+train:
+  lr: 2.0e-4
+  weight_decay: 1.0e-3
+# 读出：sum（隐向量相加）/ bilinear（点积 + 交互特征）
+readout: sum
+# 稠密短路（CLS 三模态拼接 → d_model，再与 token 均值相加）；消融项
+use_dense_shortcut: false
+# 教师输入模态（全组学；D2/D21 暂不含 METH）
+modalities: [GE, MU, CNV]
 # 规模预期：2–5M 参数（fp32 约 8–20MB；§4.5）
-params_target: 3_000_000
+params_target: 5_000_000

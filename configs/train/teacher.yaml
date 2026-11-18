@@ -1,0 +1,17 @@
+# @package train
+# 教师训练默认口径（计划书 §6.3 S0、§7.5 统计规范）。
+# 具体教师可用 configs/teacher/*.yaml 的 lr / weight_decay / epochs / patience 覆盖。
+batch_size: 512
+epochs: 20
+lr: 2.0e-4
+weight_decay: 1.0e-3
+warmup_steps: 200
+grad_clip: 1.0
+amp: true
+device: auto
+patience: 5
+# 主终点：验证集 SCC（与计划书 ΔSCC 对齐）；辅助看 R²/AUROC
+monitor: val_scc
+monitor_mode: max
+huber_delta: 1.0
+cls_weight: 0.5

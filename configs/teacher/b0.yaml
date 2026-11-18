@@ -1,0 +1,18 @@
+# @package teacher
+# B0 双线性潜交互基线（计划书 §4.2）：无图、无注意力，CPU 可跑。
+name: b0
+kind: bilinear
+d_model: 256
+hidden: 256
+dropout: 0.1
+# 药物编码：Morgan + targets；GIN 留作 T0/T1 消融
+use_gin: false
+# 靶点基因嵌入维度（18,396 × 16 ≈ 0.29M；避免稠密 256 维爆参数）
+target_embed_dim: 16
+# 输入：三个组学模态各 1,000 维通路分数（GE/MU/CNV）
+modalities: [GE, MU, CNV]
+# B0 对 lr 更敏感：浅层双线性塔用 5e-4 + 轻权重衰减
+train:
+  lr: 5.0e-4
+  weight_decay: 1.0e-4
+params_target: 3_000_000

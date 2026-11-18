@@ -32,7 +32,11 @@ def build_teacher_inputs(canonical_dir: str | Path, processed_dir: str | Path) -
     expression = io.read_parquet(canonical / "expression.parquet")
     cnv = io.read_parquet(canonical / "cnv.parquet")
     mu_a, mu_models, mu_genes = io.load_packed_matrix(canonical / "mutations_A.npz", name="matrix")
-    mu_b, _, _ = io.load_packed_matrix(canonical / "mutations_B.npz", name="matrix")
+    mu_b, mu_b_models, mu_b_genes = io.load_packed_matrix(
+        canonical / "mutations_B.npz", name="matrix"
+    )
+    if mu_b_models != mu_models:
+        raise ValueError("mutations_A/B 的细胞系行顺序不一致")
 
     def select_pool(required: list[str], *, eligible_only: bool = False) -> list[str]:
         mask = cell_lines["mapped"].copy()
@@ -75,6 +79,7 @@ def build_teacher_inputs(canonical_dir: str | Path, processed_dir: str | Path) -
             "ge_genes": np.asarray(expression.columns.tolist(), dtype=np.str_),
             "cnv_genes": np.asarray(cnv.columns.tolist(), dtype=np.str_),
             "mu_A_genes": np.asarray(mu_genes, dtype=np.str_),
+            "mu_B_genes": np.asarray(mu_b_genes, dtype=np.str_),
         },
     )
     index_payload = {
@@ -82,6 +87,7 @@ def build_teacher_inputs(canonical_dir: str | Path, processed_dir: str | Path) -
         "ge_genes": expression.columns.tolist(),
         "cnv_genes": cnv.columns.tolist(),
         "mu_A_genes": mu_genes,
+        "mu_B_genes": mu_b_genes,
         "teacher_mu_filter": "B",
         "student_mu_filter": "A",
         "shapes": {

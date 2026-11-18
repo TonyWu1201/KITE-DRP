@@ -1,0 +1,252 @@
+"""教师训练循环：单折训练、验证、早停、指标落盘。"""
+
+from __future__ import annotations
+
+import json
+import math
+import time
+from pathlib import Path
+from typing import Any
+
+import numpy as np
+import pandas as pd
+import torch
+import torch.nn.functional as F
+from torch import nn
+from torch.utils.data import DataLoader
+
+from kite_drp.eval.metrics import evaluate_predictions
+from kite_drp.models.teacher.common import TeacherBatch, TeacherOutput
+
+
+def set_seed(seed: int) -> None:
+    import random
+
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
+
+
+def resolve_device(name: str = "auto") -> torch.device:
+    if name == "auto":
+        return torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    return torch.device(name)
+
+
+def move_batch(batch: TeacherBatch, device: torch.device) -> TeacherBatch:
+    for field, value in list(batch.__dict__.items()):
+        if isinstance(value, torch.Tensor):
+            setattr(batch, field, value.to(device, non_blocking=True))
+    return batch
+
+
+def _loss(model_output: TeacherOutput, batch: TeacherBatch, config: dict[str, Any]) -> torch.Tensor:
+    delta = float(config.get("huber_delta", 1.0))
+    regression = F.huber_loss(model_output.y_hat, batch.y, delta=delta, reduction="none")
+    if batch.label_mask is not None:
+        label_mask = batch.label_mask.to(regression.dtype)
+        regression = (regression * label_mask).sum() / label_mask.sum().clamp_min(1.0)
+    else:
+        regression = regression.mean()
+    mask = batch.cls_mask.to(model_output.logits.dtype)
+    bce = F.binary_cross_entropy_with_logits(
+        model_output.logits, batch.y_cls, reduction="none"
+    )
+    classification = (bce * mask).sum() / mask.sum().clamp_min(1.0)
+    weight = float(config.get("cls_weight", 0.5))
+    return regression + weight * classification
+
+
+@torch.no_grad()
+def evaluate(
+    model: nn.Module,
+    loader: DataLoader,
+    *,
+    device: torch.device,
+    base: Any = None,
+) -> tuple[dict[str, Any], pd.DataFrame]:
+    model.eval()
+    predictions = []
+    for batch in loader:
+        batch = move_batch(batch, device)
+        output = model(batch)
+        predictions.append(
+            pd.DataFrame(
+                {
+                    "row_index": batch.row_index.cpu().numpy(),
+                    "y_true": batch.y.cpu().numpy(),
+                    "y_pred": output.y_hat.float().cpu().numpy(),
+                    "y_cls": batch.y_cls.cpu().numpy(),
+                    "y_prob": torch.sigmoid(output.logits.float()).cpu().numpy(),
+                    "cls_mask": batch.cls_mask.cpu().numpy().astype(bool),
+                    "label_mask": (
+                        batch.label_mask.cpu().numpy().astype(bool)
+                        if batch.label_mask is not None
+                        else np.ones(len(batch.y), dtype=bool)
+                    ),
+                }
+            )
+        )
+    frame = pd.concat(predictions, ignore_index=True)
+    if base is not None:
+        rows = frame["row_index"].to_numpy()
+        frame["cell_line_uid"] = base.pairs.iloc[rows]["cell_line_uid"].to_numpy()
+        frame["compound_uid"] = base.pairs.iloc[rows]["compound_uid"].to_numpy()
+    metrics = evaluate_predictions(frame)
+    return metrics, frame
+
+
+def _warmup_cosine(step: int, *, warmup: int, total: int) -> float:
+    if warmup > 0 and step < warmup:
+        return float(step + 1) / float(warmup)
+    progress = float(step - warmup) / float(max(total - warmup, 1))
+    return 0.5 * (1.0 + math.cos(math.pi * min(progress, 1.0)))
+
+
+def fit_teacher(
+    model: nn.Module,
+    *,
+    train_loader: DataLoader,
+    val_loader: DataLoader,
+    config: dict[str, Any],
+    device: torch.device,
+    run_dir: str | Path,
+    base: Any = None,
+    fold: int = 0,
+) -> dict[str, Any]:
+    """训练一个 fold，返回 history 与 best 指标。"""
+    run_dir = Path(run_dir)
+    run_dir.mkdir(parents=True, exist_ok=True)
+    epochs = int(config.get("epochs", 80))
+    patience = int(config.get("patience", 10))
+    monitor = str(config.get("monitor", "val_scc"))
+    monitor_mode = str(config.get("monitor_mode", "max"))
+    grad_clip = float(config.get("grad_clip", 1.0))
+    amp_enabled = bool(config.get("amp", True)) and device.type == "cuda"
+
+    optimizer = torch.optim.AdamW(
+        model.parameters(),
+        lr=float(config.get("lr", 5e-4)),
+        weight_decay=float(config.get("weight_decay", 1e-4)),
+    )
+    total_steps = max(int(config.get("warmup_steps", 200)), 0) + epochs * len(train_loader)
+    warmup = int(config.get("warmup_steps", 200))
+    scheduler = torch.optim.lr_scheduler.LambdaLR(
+        optimizer,
+        lr_lambda=lambda step: _warmup_cosine(
+            step, warmup=warmup, total=total_steps
+        ),
+    )
+    scaler = torch.amp.GradScaler("cuda", enabled=amp_enabled)
+
+    history: list[dict[str, Any]] = []
+    best_value = -math.inf if monitor_mode == "max" else math.inf
+    best_epoch = -1
+    best_state: dict[str, torch.Tensor] | None = None
+    stale = 0
+    step = 0
+    started = time.time()
+
+    for epoch in range(epochs):
+        model.train()
+        epoch_loss = 0.0
+        for batch in train_loader:
+            batch = move_batch(batch, device)
+            optimizer.zero_grad(set_to_none=True)
+            with torch.amp.autocast("cuda", enabled=amp_enabled):
+                output = model(batch)
+                loss = _loss(output, batch, config)
+            scaler.scale(loss).backward()
+            if grad_clip > 0:
+                scaler.unscale_(optimizer)
+                torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
+            scaler.step(optimizer)
+            scaler.update()
+            scheduler.step()
+            epoch_loss += float(loss.detach().cpu())
+            step += 1
+
+        val_metrics, _ = evaluate(model, val_loader, device=device, base=base)
+        record = {
+            "epoch": epoch,
+            "train_loss": epoch_loss / max(len(train_loader), 1),
+            "lr": float(optimizer.param_groups[0]["lr"]),
+            "val": val_metrics,
+        }
+        history.append(record)
+        value = _monitor_value(val_metrics, monitor)
+        if not math.isfinite(value):
+            value = -math.inf if monitor_mode == "max" else math.inf
+        print(
+            json.dumps(
+                {
+                    "epoch": epoch,
+                    "train_loss": round(record["train_loss"], 5),
+                    "val_r2": round(val_metrics["regression"]["r2"], 4),
+                    "val_scc": round(val_metrics["regression"]["scc"], 4),
+                    "val_auroc": round(val_metrics["classification"]["auroc"], 4),
+                },
+                ensure_ascii=False,
+            ),
+            flush=True,
+        )
+        improved = (value > best_value + 1e-6) if monitor_mode == "max" else (
+            value < best_value - 1e-6
+        )
+        if improved:
+            best_value = value
+            best_epoch = epoch
+            stale = 0
+            best_state = {
+                key: tensor.detach().cpu().clone()
+                for key, tensor in model.state_dict().items()
+            }
+        else:
+            stale += 1
+            if stale >= patience:
+                print(json.dumps({"early_stop": epoch, "best_epoch": best_epoch}))
+                break
+
+    if best_state is not None:
+        model.load_state_dict(best_state)
+    final_metrics, final_frame = evaluate(model, val_loader, device=device, base=base)
+    result = {
+        "fold": fold,
+        "monitor": monitor,
+        "best_value": best_value,
+        "best_epoch": best_epoch,
+        "epochs_run": len(history),
+        "elapsed_sec": time.time() - started,
+        "val": final_metrics,
+        "history": history,
+    }
+    (run_dir / "history.json").write_text(
+        json.dumps(history, ensure_ascii=False, indent=2, default=float), encoding="utf-8"
+    )
+    (run_dir / "metrics.json").write_text(
+        json.dumps(result, ensure_ascii=False, indent=2, default=float), encoding="utf-8"
+    )
+    final_frame.to_parquet(run_dir / "val_predictions.parquet", index=False)
+    torch.save(
+        {"model": model.state_dict(), "config": config, "fold": fold},
+        run_dir / "best.pt",
+    )
+    return result
+
+
+def _monitor_value(metrics: dict[str, Any], monitor: str) -> float:
+    if monitor == "val_scc":
+        return float(metrics["regression"]["scc"])
+    if monitor == "val_r2":
+        return float(metrics["regression"]["r2"])
+    if monitor == "val_auroc":
+        return float(metrics["classification"]["auroc"])
+    if monitor == "val_pcc":
+        return float(metrics["regression"]["pcc"])
+    raise KeyError(f"未知 monitor：{monitor}")
+
+
+__all__ = ["evaluate", "fit_teacher", "move_batch", "resolve_device", "set_seed"]

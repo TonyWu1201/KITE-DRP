@@ -1,0 +1,10 @@
+# @package similarity
+# H3CDR 式细胞系相似性（fold-safe 改造；docs/adr/0005、计划书 E-sim）。
+enabled: true
+# 默认 GE+MU（M-716 完整）；CNV 需 pool=M-509 且所有细胞 CNV 可观测
+modalities: [GE, MU]
+# auto = median pairwise distance（1,000 维通路分数下固定 sigma=2 会下溢）
+sigma: auto
+# H3CDR 默认 N=15、t=3
+top_n: 15
+iterations: 3

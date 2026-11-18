@@ -11,6 +11,12 @@
 | `paths` | `paths/` | 仓库内相对路径（唯一路径来源） | §3.8、附录 B |
 | `data` | `data/` | 数据集、标签方向、教师/学生模态集合、组学/先验口径 | §3、§5.1 |
 | `split` | `split/` | P0–P4/LPO 划分协议 | §7.2 |
+| `teacher` | `teacher/` | B0/T0/T1 教师结构与规模 | §4 |
+| `similarity` | `similarity/` | H3CDR 式细胞相似性（fold-safe） | §4.4、E-sim |
+| `train` | `train/` | 优化器/早停/AMP 训练口径 | §6.3 |
+| `student` | `student/` | A/B/S-latent 学生结构与参数预算 | §5.4–5.5 |
+| `kd` | `kd/` | 四层蒸馏信号与权重（解释蒸馏默认关闭） | §6.2 |
+| `edge` | `edge/` | 端侧平台、量化与验收阈值 | §9 |
 
 数据管线入口（不依赖 Hydra，可直接运行）：
 
@@ -22,10 +28,6 @@
 
 `configs/data/student.yaml` 与 `configs/data/tcga.yaml` 是数据侧子配置（学生输入/TCGA 评估），
 当前由 `data.cli` 的默认值与 `configs/data/gdsc2.yaml` 合并使用。
-| `teacher` | `teacher/` | B0/T0/T1 教师结构与规模 | §4 |
-| `student` | `student/` | A/B/S-latent 学生结构与参数预算 | §5.4–5.5 |
-| `kd` | `kd/` | 四层蒸馏信号与权重（解释蒸馏默认关闭） | §6.2 |
-| `edge` | `edge/` | 端侧平台、量化与验收阈值 | §9 |
 
 ## 约定
 

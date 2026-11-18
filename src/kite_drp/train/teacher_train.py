@@ -1,0 +1,259 @@
+"""教师训练入口（Hydra）。
+
+用法：
+    uv run python -m kite_drp.train.teacher_train teacher=b0 split=lco
+    uv run python -m kite_drp.train.teacher_train teacher=t0 split=lco fold=all seed=0
+"""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+from typing import Any
+
+import hydra
+import numpy as np
+import torch
+from hydra.core.hydra_config import HydraConfig
+from omegaconf import DictConfig, OmegaConf
+
+from kite_drp.common.paths import CONFIGS_DIR, REPO_ROOT
+from kite_drp.data.dataset import TeacherPairDataset
+from kite_drp.data.similarity import SimilarityConfig
+from kite_drp.models.teacher.b0 import BilinearTeacher
+from kite_drp.models.teacher.common import count_parameters
+from kite_drp.models.teacher.t0 import T0Teacher
+from kite_drp.train.data import build_pair_tensors, make_loader
+from kite_drp.train.engine import fit_teacher, resolve_device, set_seed
+from kite_drp.train.features import (
+    build_cell_features,
+    build_drug_features,
+    build_fold_similarity,
+)
+
+
+def _build_model(
+    config: dict[str, Any],
+    *,
+    pathway_dim: int,
+    morgan_dim: int,
+    n_target_genes: int,
+) -> torch.nn.Module:
+    teacher = config["teacher"]
+    name = str(teacher.get("name", "t0"))
+    common = {
+        "pathway_dim": pathway_dim,
+        "morgan_dim": morgan_dim,
+        "n_target_genes": n_target_genes,
+        "d_model": int(teacher.get("d_model", 256)),
+        "hidden": int(teacher.get("hidden", 256)),
+        "dropout": float(teacher.get("dropout", 0.1)),
+        "use_gin": bool(teacher.get("use_gin", False)),
+        "target_embed_dim": int(teacher.get("target_embed_dim", 16)),
+    }
+    if name == "b0":
+        return BilinearTeacher(**common)
+    if name == "t0":
+        return T0Teacher(
+            **common,
+            n_heads=int(teacher.get("n_heads", 4)),
+            n_layers=int(teacher.get("n_layers", 2)),
+            top_k=int(teacher.get("top_k", 64)),
+            use_neighbor=bool(teacher.get("use_neighbor", True))
+            and bool(config.get("similarity", {}).get("enabled", True)),
+            modality_dropout=float(teacher.get("modality_dropout", 0.1)),
+            readout=str(teacher.get("readout", "sum")),
+            use_dense_shortcut=bool(teacher.get("use_dense_shortcut", False)),
+        )
+    raise KeyError(f"本轮只实现 b0/t0，收到 teacher={name}")
+
+
+def _split_id(config: dict[str, Any]) -> str:
+    split = config["split"]
+    return f"{split['protocol']}_s{int(split['seed'])}"
+
+
+def _fold_list(config: dict[str, Any], total: int) -> list[int]:
+    value = config.get("fold", 0)
+    if value == "all":
+        return list(range(total))
+    return [int(value)]
+
+
+def _run_fold(
+    config: dict[str, Any],
+    *,
+    fold: int,
+    split_id: str,
+    run_dir: Path,
+) -> dict[str, Any]:
+    paths = config["paths"]
+    processed = REPO_ROOT / paths["processed_dir"]
+    splits = REPO_ROOT / paths["splits_dir"]
+    seed = int(config.get("seed", 0))
+
+    base = TeacherPairDataset(
+        processed,
+        split_id=split_id,
+        fold=fold,
+        pool=str(config.get("pool", "M-716")),
+        split_dir=splits,
+    )
+    features = build_cell_features(processed, split_id=split_id, fold=fold)
+    drugs = build_drug_features(processed)
+
+    similarity_cfg = SimilarityConfig.from_dict(config.get("similarity", {}))
+    similarity_enabled = (
+        bool(config.get("similarity", {}).get("enabled", True))
+        and str(config["teacher"].get("name", "t0")) == "t0"
+        and bool(config["teacher"].get("use_neighbor", True))
+    )
+    if similarity_enabled:
+        fold_def = next(item for item in base.split["folds"] if int(item["fold"]) == fold)
+        neighbors, weights, is_train, similarity_meta = build_fold_similarity(
+            features,
+            train_cells=list(fold_def["train"]),
+            config=similarity_cfg,
+            processed_dir=processed,
+            split_id=split_id,
+            fold=fold,
+            cache_dir=REPO_ROOT / paths["interim_dir"] / "teacher" / "similarity",
+        )
+        tensors = build_pair_tensors(features, drugs, neighbors=neighbors, weights=weights)
+    else:
+        similarity_meta = {"enabled": False}
+        tensors = build_pair_tensors(features, drugs)
+
+    train_cfg = dict(config["train"])
+    train_cfg.update(config["teacher"].get("train", {}))
+    use_gin = bool(config["teacher"].get("use_gin", False))
+    batch_size = int(train_cfg.get("batch_size", 512))
+    train_loader = make_loader(
+        base,
+        tensors,
+        drugs,
+        split="train",
+        batch_size=batch_size,
+        shuffle=True,
+        use_gin=use_gin,
+        seed=seed + fold,
+    )
+    val_loader = make_loader(
+        base,
+        tensors,
+        drugs,
+        split="val",
+        batch_size=batch_size,
+        shuffle=False,
+        use_gin=use_gin,
+    )
+
+    model = _build_model(
+        config,
+        pathway_dim=int(features.ge.shape[1]),
+        morgan_dim=int(drugs.morgan.shape[1]),
+        n_target_genes=drugs.target_dim,
+    )
+    params = count_parameters(model)
+    target = int(config["teacher"].get("params_target", 5_000_000))
+    print(
+        json.dumps(
+            {
+                "variant": config["teacher"]["name"],
+                "fold": fold,
+                "split": split_id,
+                "params": params,
+                "params_target": target,
+                "train_pairs": int(base.indices("train").size),
+                "val_pairs": int(base.indices("val").size),
+            },
+            ensure_ascii=False,
+        ),
+        flush=True,
+    )
+    if params > target:
+        raise ValueError(f"教师参数 {params:,} 超过目标 {target:,}")
+
+    device = resolve_device(str(train_cfg.get("device", "auto")))
+    model = model.to(device)
+    fold_dir = run_dir / f"fold{fold}"
+    result = fit_teacher(
+        model,
+        train_loader=train_loader,
+        val_loader=val_loader,
+        config=train_cfg,
+        device=device,
+        run_dir=fold_dir,
+        base=base,
+        fold=fold,
+    )
+    result["params"] = params
+    result["similarity"] = similarity_meta
+    result["train_pairs"] = int(base.indices("train").size)
+    result["val_pairs"] = int(base.indices("val").size)
+    model_spec = {
+        "model_class": str(config["teacher"]["name"]),
+        "pathway_dim": int(features.ge.shape[1]),
+        "morgan_dim": int(drugs.morgan.shape[1]),
+        "n_target_genes": int(drugs.target_dim),
+        "teacher": config["teacher"],
+    }
+    (fold_dir / "model_spec.json").write_text(
+        json.dumps(model_spec, ensure_ascii=False, indent=2, default=str), encoding="utf-8"
+    )
+    return result
+
+
+@hydra.main(version_base=None, config_path=str(CONFIGS_DIR), config_name="config")
+def main(config: DictConfig) -> None:
+    resolved = OmegaConf.to_container(config, resolve=True)
+    assert isinstance(resolved, dict)
+    seed = int(resolved.get("seed", 0))
+    set_seed(seed)
+    torch.set_float32_matmul_precision("high")
+
+    output_dir = Path(HydraConfig.get().runtime.output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    OmegaConf.save(config, output_dir / "resolved_config.yaml")
+
+    split_id = _split_id(resolved)
+    summary_path = REPO_ROOT / resolved["paths"]["splits_dir"] / f"{split_id}.json"
+    if not summary_path.is_file():
+        raise FileNotFoundError(f"split 文件不存在：{summary_path}")
+    split_payload = json.loads(summary_path.read_text(encoding="utf-8"))
+    folds = _fold_list(resolved, len(split_payload["folds"]))
+
+    results = []
+    for fold in folds:
+        print(json.dumps({"start_fold": fold, "split": split_id}), flush=True)
+        results.append(
+            _run_fold(resolved, fold=fold, split_id=split_id, run_dir=output_dir)
+        )
+
+    summary = {
+        "variant": resolved["teacher"]["name"],
+        "split": split_id,
+        "seed": seed,
+        "pool": resolved.get("pool", "M-716"),
+        "folds": results,
+        "mean_val": {
+            key: float(np.nanmean([result["val"]["regression"][key] for result in results]))
+            for key in ("r2", "pcc", "scc", "rmse")
+        }
+        | {
+            key: float(
+                np.nanmean(
+                    [result["val"]["classification"][key] for result in results]
+                )
+            )
+            for key in ("auroc", "auprc", "ece")
+        },
+    }
+    (output_dir / "summary.json").write_text(
+        json.dumps(summary, ensure_ascii=False, indent=2, default=float), encoding="utf-8"
+    )
+    print(json.dumps({"status": "ok", "summary": str(output_dir / "summary.json")}))
+
+
+if __name__ == "__main__":
+    main()

@@ -297,6 +297,8 @@ class TeacherPairDataset(_BASE):  # type: ignore[misc]
         y_cls, cls_mask = sensitivity_class(self.pairs, self.fit_stats.label_scaler)
         self.y_cls = y_cls
         self.cls_mask = cls_mask
+        labeled = set(self.fit_stats.label_scaler["compound_uid"])
+        self.label_mask = self.pairs["compound_uid"].isin(labeled).to_numpy(dtype=bool)
         self.cell_idx = self.pairs["cell_line_uid"].map(self.cell_index).to_numpy(dtype=np.int64)
         self.drug_idx = self.pairs["compound_uid"].map(self.drug_index).to_numpy(dtype=np.int64)
 
@@ -317,6 +319,7 @@ class TeacherPairDataset(_BASE):  # type: ignore[misc]
             "y": float(self.y[index]),
             "y_cls": float(self.y_cls[index]),
             "cls_mask": bool(self.cls_mask[index]),
+            "label_mask": bool(self.label_mask[index]),
             "split": str(self.split_label[index]),
         }
 

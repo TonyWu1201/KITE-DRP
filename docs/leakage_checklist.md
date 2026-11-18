@@ -9,8 +9,8 @@
 | 2 | 划分独立性 | 训练/验证/测试按细胞系或药物分组，同源/重复细胞系不得跨组 | ✅ | `kite-drp data validate --all` 的 split validator：group_disjoint/no_group_overlap 全绿 |
 | 3 | split 文件化 | split 文件（含 group id / seed / 脚本 hash）公开且可重建 | ✅ | `data/splits/*.json` + `split_manifest.json`（sha256/config_hash/code_hash） |
 | 4 | 预处理仅在训练 fold | 基因选择、归一化、HVG、通路打分参数只在训练 fold 上 fit | ✅ | `src/kite_drp/data/fit.py` 的 FitScope/Standardizer；扰动测试 4 协议全绿 |
-| 5 | 补全/批次校正 fit 范围 | VAE、ComBat 等只在训练集 fit，测试集 transform-only | ✅ | VAE 目标空间只由 U_vae 规则定义；`fit_stats` 逐 fold 拟合，训练接口只接受 train_indices |
-| 6 | 测试集隔离 | 测试集不参与超参搜索、早停、模型选择 | ☐ | |
+| 5 | 补全/批次校正 fit 范围 | VAE、ComBat、相似性等只在训练集 fit，测试集 transform-only | ✅ | VAE 目标空间只由 U_vae 规则定义；`fit_stats` 逐 fold 拟合；H3CDR 相似性 `fit` 只在 train 细胞、query 只连 train 锚点（`data/similarity.py`，`tests/data/test_teacher_features.py`） |
+| 6 | 测试集隔离 | 测试集不参与超参搜索、早停、模型选择 | ✅ | `train/engine.py` 早停/选模只用 val；test 仅在最终报告读取（LCO 当前未跑 test） |
 | 7 | 解释超参 | 解释方法超参不在测试集上调 | ☐ | |
 | 8 | TCGA 使用红线 | TCGA 不参与主模型训练/选模/早停；L3 半监督单列、不进主表 | ✅ | `TcgaEvalDataset.purpose="eval"`；TCGA 产物在 `data/interim/canonical/tcga_*`，processed 主 manifest 不包含 |
 | 9 | 弱标签来源 | L2 标签来源（Ding 2016 等）与人工整理口径写清，不称"官方药敏数据" | ☐ | |

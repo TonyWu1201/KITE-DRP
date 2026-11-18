@@ -18,7 +18,9 @@
 | 仓库结构 / Git + Git LFS 策略 / 文档体系 | ✅ 已就绪 |
 | Python 环境：Windows + Linux、CUDA 12.6（cu126）、uv 锁文件、CI、pre-commit | ✅ 已就绪并通过本地验证 |
 | 端侧部署脚手架：本机 Web 服务（前端页面 + HTTP API + 后端排队，离线合规） | ✅ 可运行（demo 模式，待接真实 ONNX 模型） |
-| 数据管线（下载/预处理/split）与算法代码（教师/学生/蒸馏/评估） | 🚧 待实现（G0 门禁前完成）；`src/kite_drp/**` 目前为带说明的骨架 |
+| 数据管线（下载/预处理/split/fit-stats/自包含 processed） | ✅ G0 完成 |
+| 教师 B0 / T0（训练、指标、H3CDR 式相似性、预检） | ✅ v0.1（LCO 5 折，单 seed；模型卡见 `docs/model_cards/`） |
+| 教师 T1 / 学生 / 蒸馏 / 端侧导出 | 🚧 待实现 |
 
 本轮结构与工程配置的实施记录见
 [`plans&notes/2026-11-15_仓库结构与工程配置说明.md`](<plans&notes/2026-11-15_仓库结构与工程配置说明.md>)；
@@ -203,7 +205,12 @@ uv run uvicorn app.main:app --host 127.0.0.1 --port 8000
 - 运行示例（算法代码实现后）：
 
   ```bash
-  uv run python -m kite_drp.train.teacher_train --config-name config teacher=t0 split=lco
+  # 教师 B0 / T0（LCO 单折 / 5 折）
+  uv run python -m kite_drp.train.teacher_train teacher=b0 split=lco fold=0
+  uv run python -m kite_drp.train.teacher_train teacher=t0 split=lco fold=all seed=0
+  # 消融示例：关闭相似性邻居 token（E-sim）
+  uv run python -m kite_drp.train.teacher_train teacher=t0 teacher.use_neighbor=false
+  # 学生 A 档 + 输出软标签蒸馏（待实现）
   uv run python -m kite_drp.train.student_train --config-name config student=a kd=default
   ```
 

@@ -7,14 +7,20 @@ defaults:
   - paths: default
   - data: gdsc2
   - split: lco
+  - similarity: h3cdr
   - teacher: t0
   - student: a
   - kd: default
   - edge: pi5
+  - train: teacher
   - _self_
 
 # 全局随机种子；主结果至少 3 seeds（计划书 §7.1）
 seed: 0
+# 单折（0–4）或 all
+fold: 0
+# 教师池：M-716（GE+MU，CNV 缺失 mask）/ M-509（三组学完整）
+pool: M-716
 # 运行名；null 表示由 Hydra 时间戳/任务名自动生成
 run_name: null
 

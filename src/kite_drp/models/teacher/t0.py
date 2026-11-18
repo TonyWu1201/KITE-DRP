@@ -1,0 +1,189 @@
+"""T0：多模态交叉注意力教师（计划书 §4.3）。
+
+结构：
+- 三个组学模态（GE/MU/CNV）各自把 1,000 维通路分数压成
+  ``[CLS] + top-k 通路 token``（默认 k=64，控制端到端序列长度）；
+- 药物 token 作为 query 交叉注意组学 token（MKDR 式 cross-modality attention）；
+- 可选相似性邻居 token（H3CDR 式 top-N 邻居的 GE 通路加权均值，gate 初始 0）；
+- 2 层 TransformerEncoder 建模 token 间关系，回归 + 分类双头。
+"""
+
+from __future__ import annotations
+
+import math
+
+import torch
+from torch import Tensor, nn
+
+from kite_drp.models.teacher.common import TeacherBatch, TeacherOutput
+from kite_drp.models.teacher.drug_enc import DrugEncoder
+from kite_drp.models.teacher.heads import ResponseHeads
+
+
+class PathwayTokenEncoder(nn.Module):
+    """把 (B, P) 通路分数编码为 (B, 1+K, d)。"""
+
+    def __init__(
+        self,
+        pathway_dim: int,
+        d_model: int,
+        *,
+        top_k: int = 64,
+        dropout: float = 0.1,
+    ) -> None:
+        super().__init__()
+        self.top_k = int(top_k)
+        self.pathway_embedding = nn.Embedding(pathway_dim, d_model)
+        self.score_proj = nn.Linear(1, d_model)
+        self.cls_proj = nn.Linear(pathway_dim, d_model)
+        self.type_embedding = nn.Parameter(torch.zeros(d_model))
+        self.norm = nn.LayerNorm(d_model)
+        self.dropout = nn.Dropout(dropout)
+
+    def forward(self, scores: Tensor) -> Tensor:
+        k = min(self.top_k, scores.size(1))
+        indices = scores.abs().topk(k, dim=1).indices
+        values = scores.gather(1, indices).unsqueeze(-1)
+        tokens = self.pathway_embedding(indices) + self.score_proj(values)
+        cls = self.cls_proj(scores).unsqueeze(1)
+        stacked = torch.cat([cls, tokens], dim=1) + self.type_embedding
+        return self.dropout(self.norm(stacked))
+
+
+class T0Teacher(nn.Module):
+    def __init__(
+        self,
+        *,
+        pathway_dim: int,
+        morgan_dim: int,
+        n_target_genes: int,
+        d_model: int = 256,
+        hidden: int = 256,
+        n_heads: int = 4,
+        n_layers: int = 2,
+        dropout: float = 0.1,
+        top_k: int = 64,
+        use_gin: bool = False,
+        use_neighbor: bool = True,
+        modality_dropout: float = 0.1,
+        target_embed_dim: int = 16,
+        readout: str = "sum",
+        use_dense_shortcut: bool = False,
+    ) -> None:
+        super().__init__()
+        self.encoders = nn.ModuleList(
+            [
+                PathwayTokenEncoder(pathway_dim, d_model, top_k=top_k, dropout=dropout)
+                for _ in range(3)
+            ]
+        )
+        self.missing_tokens = nn.ParameterList(
+            [nn.Parameter(torch.zeros(1, 1, d_model)) for _ in range(3)]
+        )
+        self.missing_cnv = nn.Parameter(torch.zeros(1, 1, d_model))
+        self.drug = DrugEncoder(
+            morgan_dim=morgan_dim,
+            n_target_genes=n_target_genes,
+            d_model=d_model,
+            hidden=hidden,
+            dropout=dropout,
+            use_gin=use_gin,
+            target_embed_dim=target_embed_dim,
+        )
+        self.cross_attn = nn.MultiheadAttention(
+            d_model, n_heads, dropout=dropout, batch_first=True
+        )
+        self.cross_norm = nn.LayerNorm(d_model)
+        self.dropout = nn.Dropout(dropout)
+        self.use_dense_shortcut = bool(use_dense_shortcut)
+        if self.use_dense_shortcut:
+            self.dense_cell = nn.Sequential(
+                nn.Linear(d_model * 3, d_model),
+                nn.GELU(),
+                nn.Dropout(dropout),
+                nn.LayerNorm(d_model),
+            )
+        layer = nn.TransformerEncoderLayer(
+            d_model=d_model,
+            nhead=n_heads,
+            dim_feedforward=d_model * 4,
+            dropout=dropout,
+            activation="gelu",
+            batch_first=True,
+            norm_first=True,
+        )
+        self.encoder = nn.TransformerEncoder(layer, num_layers=n_layers, enable_nested_tensor=False)
+        self.readout = readout
+        self.d_model = d_model
+        head_dim = d_model * 3 if readout == "bilinear" else d_model
+        self.heads = ResponseHeads(head_dim, hidden=d_model // 2, dropout=dropout)
+        self.bias = nn.Parameter(torch.zeros(1))
+        self.use_neighbor = use_neighbor
+        self.modality_dropout = float(modality_dropout)
+        if use_neighbor:
+            self.neighbor_proj = nn.Linear(pathway_dim, d_model)
+            self.neighbor_type = nn.Parameter(torch.zeros(d_model))
+            self.neighbor_gate = nn.Parameter(torch.zeros(1))
+
+    def _maybe_drop(self, tokens: Tensor, index: int) -> Tensor:
+        if not self.training or self.modality_dropout <= 0:
+            return tokens
+        drop = (torch.rand(tokens.size(0), 1, 1, device=tokens.device) < self.modality_dropout).to(
+            tokens.dtype
+        )
+        missing = self.missing_tokens[index].expand_as(tokens)
+        return tokens * (1.0 - drop) + missing * drop
+
+    def forward(self, batch: TeacherBatch) -> TeacherOutput:
+        ge_tokens = self._maybe_drop(self.encoders[0](batch.ge), 0)
+        mu_tokens = self._maybe_drop(self.encoders[1](batch.mu), 1)
+
+        cnv_tokens = self.encoders[2](batch.cnv)
+        mask = batch.cnv_mask.view(-1, 1, 1).to(cnv_tokens.dtype)
+        cnv_tokens = cnv_tokens * mask + self.missing_cnv.expand_as(cnv_tokens) * (1.0 - mask)
+        cnv_tokens = self._maybe_drop(cnv_tokens, 2)
+
+        omics = [ge_tokens, mu_tokens, cnv_tokens]
+        cls_tokens = torch.cat([ge_tokens[:, 0], mu_tokens[:, 0], cnv_tokens[:, 0]], dim=-1)
+        if self.use_neighbor and batch.neighbor_ge is not None:
+            gate = torch.sigmoid(self.neighbor_gate)
+            neighbor = self.neighbor_proj(batch.neighbor_ge).unsqueeze(1)
+            omics.append(gate * (neighbor + self.neighbor_type))
+        tokens = torch.cat(omics, dim=1)
+
+        drug0 = self.drug(batch)
+        cross, _ = self.cross_attn(
+            query=drug0.unsqueeze(1),
+            key=tokens,
+            value=tokens,
+            need_weights=False,
+        )
+        drug_fused = self.cross_norm(drug0 + self.dropout(cross.squeeze(1)))
+        encoded = self.encoder(torch.cat([drug_fused.unsqueeze(1), tokens], dim=1))
+
+        z_drug = encoded[:, 0] + drug0
+        z_cell = encoded[:, 1:].mean(dim=1)
+        if self.use_dense_shortcut:
+            z_cell = z_cell + self.dense_cell(cls_tokens)
+        if self.readout == "bilinear":
+            interaction = z_cell * z_drug
+            y_hat = interaction.sum(dim=-1) / math.sqrt(self.d_model) + self.bias
+            z_pair = torch.cat([interaction, z_cell, z_drug], dim=-1)
+            _, logits = self.heads(z_pair)
+        elif self.readout == "hadamard":
+            z_pair = z_cell * z_drug
+            y_hat, logits = self.heads(z_pair)
+        else:
+            z_pair = z_drug + z_cell
+            y_hat, logits = self.heads(z_pair)
+        return TeacherOutput(
+            y_hat=y_hat,
+            logits=logits,
+            z_pair=z_pair,
+            z_cell=z_cell,
+            z_drug=z_drug,
+            aux={"attention_tokens": tokens},
+        )
+
+
+__all__ = ["PathwayTokenEncoder", "T0Teacher"]
