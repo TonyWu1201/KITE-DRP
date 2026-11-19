@@ -257,9 +257,13 @@ def fit_teacher(
             if grad_clip > 0:
                 scaler.unscale_(optimizer)
                 torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
+            scale_before = scaler.get_scale()
             scaler.step(optimizer)
             scaler.update()
-            scheduler.step()
+            # AMP 溢出时 scaler 会跳过 optimizer.step；此时不应推进 scheduler，
+            # 否则会出现 “lr_scheduler.step() before optimizer.step()” 警告。
+            if scaler.get_scale() >= scale_before:
+                scheduler.step()
             if ema_model is not None:
                 _update_ema(ema_model, model, ema_decay)
             epoch_loss += float(loss.detach().cpu())
