@@ -122,10 +122,10 @@ class T1Teacher(nn.Module):
         self.graph_heads = ResponseHeads(self.d_model, hidden=self.d_model // 2, dropout=dropout)
 
         # gate 初始 0：T1 从 P1 出发；图分支必须自己学出贡献。
+        # gene_stats_proj 零初始化保证 G0 == P1 基因表；gene_out_proj 保持随机，
+        # 否则 gene_gate 在 0 点的梯度恒为 0，PPI 知识永远进不了 target 分支。
         nn.init.zeros_(self.gene_stats_proj.weight)
         nn.init.zeros_(self.gene_stats_proj.bias)
-        nn.init.zeros_(self.gene_out_proj.weight)
-        nn.init.zeros_(self.gene_out_proj.bias)
         self._graph_ready = False
 
     # ------------------------------------------------------------------ graph

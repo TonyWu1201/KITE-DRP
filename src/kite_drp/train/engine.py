@@ -16,7 +16,7 @@ import torch.nn.functional as F
 from torch import nn
 from torch.utils.data import DataLoader
 
-from kite_drp.eval.metrics import evaluate_predictions
+from kite_drp.eval.metrics import evaluate_predictions, regression_metrics
 from kite_drp.models.teacher.common import TeacherBatch, TeacherOutput
 from kite_drp.train.losses import pairwise_rank_loss
 
@@ -107,9 +107,13 @@ def evaluate(
 ) -> tuple[dict[str, Any], pd.DataFrame]:
     model.eval()
     predictions = []
+    graph_predictions: list[np.ndarray] = []
     for batch in loader:
         batch = move_batch(batch, device)
         output = model(batch)
+        graph_y = output.aux.get("y_graph")
+        if graph_y is not None:
+            graph_predictions.append(graph_y.float().cpu().numpy())
         predictions.append(
             pd.DataFrame(
                 {
@@ -133,6 +137,13 @@ def evaluate(
         frame["cell_line_uid"] = base.pairs.iloc[rows]["cell_line_uid"].to_numpy()
         frame["compound_uid"] = base.pairs.iloc[rows]["compound_uid"].to_numpy()
     metrics = evaluate_predictions(frame)
+    if graph_predictions:
+        graph_pred = np.concatenate(graph_predictions)
+        mask = frame["label_mask"].to_numpy(dtype=bool)
+        metrics["graph_regression"] = regression_metrics(
+            frame["y_true"].to_numpy()[mask],
+            graph_pred[mask],
+        )
     return metrics, frame
 
 
@@ -253,6 +264,10 @@ def fit_teacher(
                     "rank_weight": round(rank_weight, 4),
                     "val_r2": round(val_metrics["regression"]["r2"], 4),
                     "val_scc": round(val_metrics["regression"]["scc"], 4),
+                    "val_graph_scc": round(
+                        val_metrics.get("graph_regression", {}).get("scc", float("nan")),
+                        4,
+                    ),
                     "val_auroc": round(val_metrics["classification"]["auroc"], 4),
                     "gates": {key: round(value, 4) for key, value in gates.items()},
                 },
@@ -315,6 +330,8 @@ def _monitor_value(metrics: dict[str, Any], monitor: str) -> float:
         return float(metrics["classification"]["auroc"])
     if monitor == "val_pcc":
         return float(metrics["regression"]["pcc"])
+    if monitor == "val_per_drug_scc":
+        return float(metrics.get("per_drug", {}).get("scc_mean", float("nan")))
     raise KeyError(f"未知 monitor：{monitor}")
 
 

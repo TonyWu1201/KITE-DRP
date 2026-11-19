@@ -63,6 +63,11 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--patience", type=int, default=5)
     parser.add_argument("--batch-size", type=int, default=512)
     parser.add_argument(
+        "--monitor",
+        default="val_scc",
+        help="早停指标；LDO 可改用 val_per_drug_scc",
+    )
+    parser.add_argument(
         "--variants",
         default="p1,t1,t1_random_ppi,t1_random_dti",
         help="逗号分隔；可选 " + ",".join(VARIANTS),
@@ -93,6 +98,19 @@ def _fold_arg(folds: str) -> str:
     return "[" + ",".join(values) + "]"
 
 
+def _resolve_init_from(init_from: str | None, seed: int) -> str | None:
+    """支持两种写法：P1 run 目录，或包含 runs/p1_s{seed} 的 quick-screen 根目录。"""
+    if not init_from:
+        return None
+    path = Path(init_from)
+    if not path.is_absolute():
+        path = REPO_ROOT / path
+    candidate = path / "runs" / f"p1_s{seed}"
+    if candidate.is_dir():
+        return str(candidate)
+    return str(path)
+
+
 def _command(
     *,
     variant: str,
@@ -102,6 +120,7 @@ def _command(
     epochs: int,
     patience: int,
     batch_size: int,
+    monitor: str,
     init_from: str | None,
     run_dir: Path,
 ) -> list[str]:
@@ -118,12 +137,14 @@ def _command(
         f"train.epochs={epochs}",
         f"train.patience={patience}",
         f"train.batch_size={batch_size}",
+        f"train.monitor={monitor}",
         *spec["overrides"],
     ]
     if spec["teacher"].startswith("t1"):
-        if not init_from:
+        resolved = _resolve_init_from(init_from, seed)
+        if not resolved:
             raise SystemExit("T1 变体需要 --init-from P1 run 目录")
-        command.append(f"teacher.init_from={init_from}")
+        command.append(f"teacher.init_from={resolved}")
     return command
 
 
@@ -239,6 +260,7 @@ def main() -> None:
                 epochs=args.epochs,
                 patience=args.patience,
                 batch_size=args.batch_size,
+                monitor=args.monitor,
                 init_from=args.init_from,
                 run_dir=run_dir,
             )
