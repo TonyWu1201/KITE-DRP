@@ -125,31 +125,62 @@ def load_pairs(processed_dir: str | Path) -> pd.DataFrame:
     return io.read_parquet(path)
 
 
-def sensitivity_labels(pairs: pd.DataFrame, label_scaler: pd.DataFrame) -> np.ndarray:
-    """按 fold 内逐药 scaler 返回 ``-z(LN_IC50)``；未知药物回退 0（=中位）。"""
+def sensitivity_labels(
+    pairs: pd.DataFrame,
+    label_scaler: pd.DataFrame,
+    *,
+    fallback: tuple[float, float] | None = None,
+) -> np.ndarray:
+    """按 fold 内逐药 scaler 返回 ``-z(LN_IC50)``。
+
+    ``fallback=(mean, std)`` 用于 LDO/scaffold 中训练 fold 未见的药物：所有细胞
+    共用训练集全局 mean/std（仍是逐药单调变换，逐药 SCC/PCC 不受影响）。未提供
+    fallback 时未知药物回退 0，仅为向后兼容。
+    """
     stats = label_scaler.set_index("compound_uid")
     mean = pairs["compound_uid"].map(stats["mean"])
     std = pairs["compound_uid"].map(stats["std"]).replace(0, np.nan)
     z = (pairs["ln_ic50"] - mean) / std
+    if fallback is not None:
+        fallback_mean, fallback_std = (float(value) for value in fallback)
+        if not np.isfinite(fallback_std) or fallback_std <= 0:
+            raise ValueError(f"fallback std 非正：{fallback_std}")
+        unknown = ~pairs["compound_uid"].isin(stats.index).to_numpy()
+        if unknown.any():
+            z = z.copy()
+            z.iloc[np.flatnonzero(unknown)] = (
+                pairs["ln_ic50"].to_numpy(dtype=float)[unknown] - fallback_mean
+            ) / fallback_std
     return (-z).fillna(0.0).to_numpy(dtype=np.float32)
 
 
 def sensitivity_class(
-    pairs: pd.DataFrame, label_scaler: pd.DataFrame
+    pairs: pd.DataFrame,
+    label_scaler: pd.DataFrame,
+    *,
+    fallback_median: float | None = None,
 ) -> tuple[np.ndarray, np.ndarray]:
     """返回 ``(y_cls, mask)``：正类=敏感（LN_IC50 ≤ fold 内逐药中位数）。
 
-    药物在训练 fold 内样本量不足（scaler 缺行）时 ``mask=False``，分类损失忽略。
+    药物在训练 fold 内样本量不足（scaler 缺行）时，若提供 ``fallback_median``
+    则用训练集全局中位数，否则 ``mask=False``（分类损失忽略）。
     """
     stats = label_scaler.set_index("compound_uid")
     median = pairs["compound_uid"].map(stats["median"])
-    valid = median.notna().to_numpy()
+    values = pairs["ln_ic50"].to_numpy(dtype=float)
+    median_values = median.to_numpy(dtype=float)
+    known = np.isfinite(median_values)
     labels = np.zeros(len(pairs), dtype=np.float32)
-    labels[valid] = (
-        pairs.loc[valid, "ln_ic50"].to_numpy(dtype=float)
-        <= median.to_numpy(dtype=float)[valid]
-    ).astype(np.float32)
-    return labels, valid
+    labels[known] = (values[known] <= median_values[known]).astype(np.float32)
+    mask = known.copy()
+    if fallback_median is not None:
+        unknown = ~known
+        if unknown.any():
+            labels[unknown] = (
+                values[unknown] <= float(fallback_median)
+            ).astype(np.float32)
+            mask = np.ones(len(pairs), dtype=bool)
+    return labels, mask
 
 
 __all__ = [

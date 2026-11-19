@@ -24,6 +24,7 @@ class TeacherBatch:
     row_index: Tensor | None = None
     label_mask: Tensor | None = None
     drug_idx: Tensor | None = None
+    cell_idx: Tensor | None = None
     ge_mask: Tensor | None = None
     mu_mask: Tensor | None = None
     neighbor_ge: Tensor | None = None

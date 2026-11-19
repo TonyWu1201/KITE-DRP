@@ -32,6 +32,7 @@ from kite_drp.train.features import (
     resolve_neighbor_source,
     resolve_similarity_config,
 )
+from kite_drp.train.t1_graph import build_t1_graph, graph_tensors
 from kite_drp.train.teacher_train import _build_model
 
 
@@ -74,13 +75,22 @@ def export_cache(
     )
     features = build_cell_features(processed, split_id=split_id, fold=fold)
     drugs = build_drug_features(processed)
+    graph_bundle = None
+    if teacher_cfg["name"] in {"t1", "t1_graph_only"}:
+        graph_bundle = build_t1_graph(
+            processed,
+            split_id=split_id,
+            fold=fold,
+            config=teacher_cfg.get("graph", {}),
+            split_dir=splits,
+        )
 
     active_modalities = list(teacher_cfg.get("modalities", ["GE", "MU", "CNV"]))
     similarity_cfg = resolve_similarity_config(config, active_modalities)
     neighbor_source = resolve_neighbor_source(teacher_cfg, active_modalities)
     similarity_enabled = (
         bool(config.get("similarity", {}).get("enabled", True))
-        and teacher_cfg["name"] in {"t0", "t0_p0", "t0_p1"}
+        and teacher_cfg["name"] in {"t0", "t0_p0", "t0_p1", "t1", "t1_graph_only"}
         and bool(teacher_cfg.get("use_neighbor", True))
     )
     target_max_tokens = (
@@ -130,6 +140,14 @@ def export_cache(
         pathway_dim=int(spec["pathway_dim"]),
         morgan_dim=int(spec["morgan_dim"]),
         n_target_genes=int(spec["n_target_genes"]),
+        n_graph_genes=(
+            int(len(graph_bundle["arrays"]["gene_ids"])) if graph_bundle is not None else None
+        ),
+        cell_in_dim=(
+            int(graph_bundle["arrays"]["cell_features"].shape[1])
+            if graph_bundle is not None
+            else None
+        ),
     )
     device = resolve_device("auto")
     checkpoint = torch.load(
@@ -137,6 +155,8 @@ def export_cache(
     )
     model.load_state_dict(checkpoint["model"])
     model.to(device).eval()
+    if graph_bundle is not None:
+        model.set_graph(graph_tensors(graph_bundle["arrays"]))  # type: ignore[attr-defined]
 
     rows: list[np.ndarray] = []
     y_soft: list[np.ndarray] = []
@@ -207,6 +227,7 @@ def export_cache(
         "red_line": "只含 train pair 软标签；val/test 不落软标签",
         "checkpoint": str(run / f"fold{fold}" / "best.pt"),
         "config": {"teacher": teacher_cfg, "similarity": config.get("similarity", {})},
+        "graph_spec": (graph_bundle["spec"] if graph_bundle is not None else None),
     }
     io.write_json(out / "meta.json", meta)
     return meta

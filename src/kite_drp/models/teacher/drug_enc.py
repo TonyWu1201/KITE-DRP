@@ -99,6 +99,7 @@ class DrugEncoder(nn.Module):
         graph_edge_dim: int = 4,
         target_embed_dim: int = 16,
         target_embedding: nn.Embedding | None = None,
+        use_target_table: bool = True,
     ) -> None:
         super().__init__()
         if not (use_morgan or use_targets or use_gin):
@@ -106,12 +107,17 @@ class DrugEncoder(nn.Module):
         self.use_gin = use_gin
         self.use_morgan = use_morgan
         self.use_targets = use_targets
+        self.target_embed_dim = int(target_embed_dim)
         self.morgan = MLP(morgan_dim, [hidden], hidden, dropout=dropout) if use_morgan else None
         if use_targets:
-            self.targets = nn.EmbeddingBag(n_target_genes, target_embed_dim, mode="mean")
-            if target_embedding is not None:
-                # P1：与细胞侧 target gene token 共享同一张基因 ID 嵌入表。
-                self.targets.weight = target_embedding.weight
+            if use_target_table:
+                self.targets = nn.EmbeddingBag(n_target_genes, target_embed_dim, mode="mean")
+                if target_embedding is not None:
+                    # P1：与细胞侧 target gene token 共享同一张基因 ID 嵌入表。
+                    self.targets.weight = target_embedding.weight
+            else:
+                # T1：靶点嵌入由外部图基因嵌入提供（见 forward(target_vec=...)）。
+                self.targets = None
             self.target_proj = nn.Linear(target_embed_dim, hidden)
         else:
             self.targets = None
@@ -135,37 +141,68 @@ class DrugEncoder(nn.Module):
             nn.LayerNorm(d_model),
         )
 
-    def forward(self, batch: TeacherBatch) -> Tensor:
+    def encode(
+        self,
+        morgan: Tensor,
+        *,
+        target_vec: Tensor | None = None,
+        target_index: Tensor | None = None,
+        target_offset: Tensor | None = None,
+        graph_node_feat: Tensor | None = None,
+        graph_edge_index: Tensor | None = None,
+        graph_edge_feat: Tensor | None = None,
+        graph_batch: Tensor | None = None,
+        graph_num_graphs: int = 0,
+    ) -> Tensor:
+        """从原始张量编码药物；T1 需要一次性编码全部 286 个药物节点。"""
         parts: list[Tensor] = []
         if self.morgan is not None:
-            parts.append(self.morgan(batch.morgan))
-        if self.targets is not None and self.target_proj is not None:
-            parts.append(self.target_proj(self.targets(batch.target_index, batch.target_offset)))
+            parts.append(self.morgan(morgan))
+        if self.use_targets and self.target_proj is not None:
+            if target_vec is None:
+                if (
+                    self.targets is not None
+                    and target_index is not None
+                    and target_offset is not None
+                ):
+                    target_vec = self.targets(target_index, target_offset)
+                else:
+                    target_vec = morgan.new_zeros(morgan.size(0), self.target_embed_dim)
+            parts.append(self.target_proj(target_vec))
         if self.use_gin and self.gin is not None:
-            num_graphs = batch.graph_num_graphs or batch.morgan.size(0)
-            if (
-                batch.graph_node_feat is None
-                or batch.graph_edge_index is None
-                or batch.graph_batch is None
-            ):
+            num_graphs = graph_num_graphs or morgan.size(0)
+            if graph_node_feat is None or graph_edge_index is None or graph_batch is None:
                 parts.append(
                     torch.zeros(
                         (num_graphs, self.gin.output_dim),
                         dtype=self.gin.node_proj.weight.dtype,
-                        device=batch.morgan.device,
+                        device=morgan.device,
                     )
                 )
             else:
                 parts.append(
                     self.gin(
-                        batch.graph_node_feat,
-                        batch.graph_edge_index,
-                        batch.graph_edge_feat,
-                        batch.graph_batch,
+                        graph_node_feat,
+                        graph_edge_index,
+                        graph_edge_feat,
+                        graph_batch,
                         num_graphs,
                     )
                 )
         return self.fuse(torch.cat(parts, dim=-1))
+
+    def forward(self, batch: TeacherBatch, target_vec: Tensor | None = None) -> Tensor:
+        return self.encode(
+            batch.morgan,
+            target_vec=target_vec,
+            target_index=batch.target_index,
+            target_offset=batch.target_offset,
+            graph_node_feat=batch.graph_node_feat,
+            graph_edge_index=batch.graph_edge_index,
+            graph_edge_feat=batch.graph_edge_feat,
+            graph_batch=batch.graph_batch,
+            graph_num_graphs=batch.graph_num_graphs,
+        )
 
 
 __all__ = ["DrugEncoder", "GINLayer", "MolecularGIN"]

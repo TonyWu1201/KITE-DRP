@@ -1,0 +1,69 @@
+# @package teacher
+# T1：图增强的 P1 教师（计划书 §4.4 的收敛版）。
+# P1 backbone（无图）默认参数与 t0_p1 一致；graph 分支默认 gate=0，
+# 用 P1 checkpoint 初始化时 T1 起点等于 P1。
+name: t1
+variant: t1
+kind: hetero_graph
+# ---- P1 backbone ----
+use_morgan: true
+use_targets: true
+use_gin: false
+target_embed_dim: 16
+d_model: 256
+n_heads: 4
+n_layers: 2
+dropout: 0.1
+top_k: 64
+use_neighbor: true
+neighbor_source: auto
+modality_dropout: 0.15
+token_types: true
+rank_embedding: true
+cell_readout: attention
+masked_modalities: true
+cross_gate: true
+readout: sum
+use_dense_shortcut: false
+shared_pathway: false
+shared_pathway_proj: false
+use_cls_proj: true
+cls_proj_mode: lowrank
+cls_proj_rank: 64
+target_branch: true
+target_gene_layers: 1
+target_max_tokens: 64
+modalities: [GE, MU, CNV]
+params_target: 7_000_000
+# 可选：同 split/fold 的 P1 run 目录（含 foldK/best.pt）或直接 .pt 路径。
+init_from: null
+# ---- graph branch ----
+graph:
+  enabled: true
+  gene_space:
+    hvg_top: 1000
+    mutation_top: 500
+    include_targets: true
+  ppi_min_score: 0.7
+  cell_gene_top_q: 0.9
+  cell_gene_mutation: true
+  max_targets_per_drug: 64
+  hidden: 128
+  layers: 2
+  heads: 4
+  dropout: 0.1
+  # none | ppi | dti | cg | ppi+dti（随机图负对照）
+  rewire: none
+  # none | ppi | dti | cg（去边消融）
+  edge_drop: none
+  seed: 20261120
+  graph_weight: 0.3
+  graph_cls_weight: 0.2
+train:
+  lr: 1.5e-4
+  weight_decay: 1.0e-3
+  rank_weight: 0.0
+  cls_weight: 0.5
+  group_by_drug: false
+  ema_decay: 0.0
+  min_epochs: 5

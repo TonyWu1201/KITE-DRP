@@ -60,12 +60,28 @@ def _loss(
     else:
         regression = regression.mean()
     mask = batch.cls_mask.to(model_output.logits.dtype)
-    bce = F.binary_cross_entropy_with_logits(
-        model_output.logits, batch.y_cls, reduction="none"
-    )
+    bce = F.binary_cross_entropy_with_logits(model_output.logits, batch.y_cls, reduction="none")
     classification = (bce * mask).sum() / mask.sum().clamp_min(1.0)
     weight = float(config.get("cls_weight", 0.5))
     loss = regression + weight * classification
+    graph_weight = float(config.get("graph_weight", 0.0))
+    if graph_weight > 0 and "y_graph" in model_output.aux:
+        graph_reg = F.huber_loss(
+            model_output.aux["y_graph"], batch.y, delta=delta, reduction="none"
+        )
+        if batch.label_mask is not None:
+            mask_reg = batch.label_mask.to(graph_reg.dtype)
+            graph_reg = (graph_reg * mask_reg).sum() / mask_reg.sum().clamp_min(1.0)
+        else:
+            graph_reg = graph_reg.mean()
+        loss = loss + graph_weight * graph_reg
+        graph_cls_weight = float(config.get("graph_cls_weight", 0.0))
+        if graph_cls_weight > 0 and "logits_graph" in model_output.aux:
+            graph_bce = F.binary_cross_entropy_with_logits(
+                model_output.aux["logits_graph"], batch.y_cls, reduction="none"
+            )
+            graph_bce = (graph_bce * mask).sum() / mask.sum().clamp_min(1.0)
+            loss = loss + graph_cls_weight * graph_bce
     if rank_weight > 0 and batch.drug_idx is not None:
         rank_mask = batch.label_mask if batch.label_mask is not None else None
         ranking = pairwise_rank_loss(
@@ -129,13 +145,9 @@ def _warmup_cosine(step: int, *, warmup: int, total: int) -> float:
 
 def _update_ema(ema_model: nn.Module, model: nn.Module, decay: float) -> None:
     with torch.no_grad():
-        for ema_param, param in zip(
-            ema_model.parameters(), model.parameters(), strict=False
-        ):
+        for ema_param, param in zip(ema_model.parameters(), model.parameters(), strict=False):
             ema_param.mul_(decay).add_(param.detach(), alpha=1.0 - decay)
-        for ema_buffer, buffer in zip(
-            ema_model.buffers(), model.buffers(), strict=False
-        ):
+        for ema_buffer, buffer in zip(ema_model.buffers(), model.buffers(), strict=False):
             ema_buffer.copy_(buffer)
 
 
@@ -169,9 +181,7 @@ def fit_teacher(
     warmup = int(config.get("warmup_steps", 200))
     scheduler = torch.optim.lr_scheduler.LambdaLR(
         optimizer,
-        lr_lambda=lambda step: _warmup_cosine(
-            step, warmup=warmup, total=total_steps
-        ),
+        lr_lambda=lambda step: _warmup_cosine(step, warmup=warmup, total=total_steps),
     )
     scaler = torch.amp.GradScaler("cuda", enabled=amp_enabled)
     ema_decay = float(config.get("ema_decay", 0.0))
@@ -218,11 +228,17 @@ def fit_teacher(
 
         eval_model = ema_model if ema_model is not None else model
         val_metrics, _ = evaluate(eval_model, val_loader, device=device, base=base)
+        gates = {
+            name: float(torch.tanh(getattr(eval_model, name)).detach())
+            for name in ("gene_gate", "cell_gate", "drug_gate")
+            if hasattr(eval_model, name)
+        }
         record = {
             "epoch": epoch,
             "train_loss": epoch_loss / max(len(train_loader), 1),
             "lr": float(optimizer.param_groups[0]["lr"]),
             "rank_weight": rank_weight,
+            "gates": gates,
             "val": val_metrics,
         }
         history.append(record)
@@ -238,13 +254,14 @@ def fit_teacher(
                     "val_r2": round(val_metrics["regression"]["r2"], 4),
                     "val_scc": round(val_metrics["regression"]["scc"], 4),
                     "val_auroc": round(val_metrics["classification"]["auroc"], 4),
+                    "gates": {key: round(value, 4) for key, value in gates.items()},
                 },
                 ensure_ascii=False,
             ),
             flush=True,
         )
-        improved = (value > best_value + 1e-6) if monitor_mode == "max" else (
-            value < best_value - 1e-6
+        improved = (
+            (value > best_value + 1e-6) if monitor_mode == "max" else (value < best_value - 1e-6)
         )
         if improved:
             best_value = value
