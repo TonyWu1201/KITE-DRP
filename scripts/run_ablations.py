@@ -210,6 +210,53 @@ VARIANTS: tuple[Variant, ...] = (
         "P0 sum，无 rank，标准随机 sampler",
         teacher="t0_p0",
     ),
+    # P1：target-aware gene branch + 低秩 cls_proj
+    Variant("t0_p1", "p1", (), "T0 P1 完整（推荐）", teacher="t0_p1"),
+    Variant(
+        "t0_p1_norank",
+        "p1_diag",
+        ("teacher.rank_embedding=false",),
+        "P1 去掉 top-k rank embedding",
+        teacher="t0_p1",
+    ),
+    Variant(
+        "t0_p1_notarget",
+        "p1_diag",
+        ("teacher.target_branch=false",),
+        "P1 去掉 target gene branch",
+        teacher="t0_p1",
+    ),
+    Variant(
+        "t0_p1_shared",
+        "p1_diag",
+        (
+            "teacher.shared_pathway=true",
+            "teacher.cls_proj_mode=shared",
+        ),
+        "P1 共享 pathway + 共享满秩 cls（对照）",
+        teacher="t0_p1",
+    ),
+    Variant(
+        "t0_p1_clsnone",
+        "p1_diag",
+        ("teacher.use_cls_proj=false",),
+        "P1 完全去掉 cls_proj",
+        teacher="t0_p1",
+    ),
+    Variant(
+        "t0_p1_t16",
+        "p1_diag",
+        ("teacher.target_max_tokens=16",),
+        "P1 靶点 token 上限 16",
+        teacher="t0_p1",
+    ),
+    Variant(
+        "t0_p1_layers0",
+        "p1_diag",
+        ("teacher.target_gene_layers=0",),
+        "P1 target token 不做 self-attention",
+        teacher="t0_p1",
+    ),
     # E2：模态消融（去掉某模态时同时去掉其编码器参数）
     Variant(
         "t0_no_ge",
@@ -258,7 +305,18 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--suite",
         default="all",
-        choices=["all", "reference", "rank", "p0", "p0_diag", "modality", "drug", "similarity"],
+        choices=[
+            "all",
+            "reference",
+            "rank",
+            "p0",
+            "p0_diag",
+            "p1",
+            "p1_diag",
+            "modality",
+            "drug",
+            "similarity",
+        ],
     )
     parser.add_argument("--only", default=None, help="逗号分隔的变体名（优先于 --suite）")
     parser.add_argument("--folds", default="0,2", help="逗号分隔折号，或 all")

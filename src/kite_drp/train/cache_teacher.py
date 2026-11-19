@@ -80,8 +80,13 @@ def export_cache(
     neighbor_source = resolve_neighbor_source(teacher_cfg, active_modalities)
     similarity_enabled = (
         bool(config.get("similarity", {}).get("enabled", True))
-        and teacher_cfg["name"] in {"t0", "t0_p0"}
+        and teacher_cfg["name"] in {"t0", "t0_p0", "t0_p1"}
         and bool(teacher_cfg.get("use_neighbor", True))
+    )
+    target_max_tokens = (
+        int(teacher_cfg.get("target_max_tokens", 64))
+        if bool(teacher_cfg.get("target_branch", False))
+        else 0
     )
     if similarity_enabled:
         fold_def = next(item for item in base.split["folds"] if int(item["fold"]) == fold)
@@ -99,9 +104,16 @@ def export_cache(
             neighbors=neighbors,
             weights=weights,
             neighbor_source=neighbor_source,
+            target_max_tokens=target_max_tokens,
+            target_modalities=active_modalities,
         )
     else:
-        tensors = build_pair_tensors(features, drugs)
+        tensors = build_pair_tensors(
+            features,
+            drugs,
+            target_max_tokens=target_max_tokens,
+            target_modalities=active_modalities,
+        )
 
     loader = make_loader(
         base,

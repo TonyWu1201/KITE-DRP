@@ -30,6 +30,14 @@ class CellFeatureSet:
     cnv_mask: np.ndarray  # (n,) bool
     ge_mask: np.ndarray  # (n,) bool
     mu_mask: np.ndarray  # (n,) bool
+    # P1 target-aware gene branch：与 ge/cnv 同一基因顺序的逐基因特征。
+    gene_ids: list[str]
+    gene_ge: np.ndarray  # (n, G) fold z
+    gene_mu: np.ndarray  # (n, G) 0/1
+    gene_cnv: np.ndarray  # (n, G) fold z（缺失细胞整行为 0）
+    gene_ge_valid: np.ndarray  # (G,) bool
+    gene_cnv_valid: np.ndarray  # (G,) bool
+    gene_mu_available: np.ndarray  # (G,) bool
     index: dict[str, int]
 
 
@@ -39,6 +47,7 @@ class DrugFeatureSet:
     morgan: np.ndarray  # (n, 2048) float32
     target_indices: list[np.ndarray]
     target_dim: int
+    target_genes: list[str]
     graph_atom_ptr: np.ndarray | None
     graph_edge_ptr: np.ndarray | None
     graph_node_feat: np.ndarray | None
@@ -93,6 +102,8 @@ def build_cell_features(
     ge_z = fit.standardize(teacher["ge"], ge_genes, kind="expr")
     w_ge = _align_weights(weights, weight_genes, ge_genes)
     ge_scores = ge_z @ w_ge.T
+    ge_frame = fit.expr_scaler.set_index("gene").reindex(ge_genes)
+    gene_ge_valid = ge_frame["valid"].fillna(False).to_numpy(dtype=bool)
 
     # CNV：fold 内 z（含裁剪）→ 通路平均 z；缺失细胞整行 0
     cnv_mask = teacher["cnv_observed_mask"].astype(bool)
@@ -100,6 +111,8 @@ def build_cell_features(
     cnv_z = cnv_z * cnv_mask[:, None]
     w_cnv = _align_weights(weights, weight_genes, cnv_genes)
     cnv_scores = cnv_z @ w_cnv.T
+    cnv_frame = fit.cnv_scaler.set_index("gene").reindex(cnv_genes)
+    cnv_valid = cnv_frame["valid"].fillna(False).to_numpy(dtype=bool)
 
     # MU：pathway 内 driver 突变基因占比
     mu_b = teacher["mu_B"].astype(np.float32)
@@ -116,6 +129,28 @@ def build_cell_features(
     mu_counts = np.maximum(membership.sum(axis=1), 1.0)
     mu_scores = (mu_sub @ membership.T) / mu_counts
 
+    n_cells = len(cell_ids)
+    n_genes = len(ge_genes)
+    # P1：把逐基因特征对齐到 GE 基因顺序（drug target_genes 也是该顺序）。
+    cnv_lookup = {gene: position for position, gene in enumerate(cnv_genes)}
+    cnv_positions = np.asarray(
+        [cnv_lookup.get(gene, -1) for gene in ge_genes], dtype=np.int64
+    )
+    cnv_ok = cnv_positions >= 0
+    gene_cnv = np.zeros((n_cells, n_genes), dtype=np.float32)
+    gene_cnv[:, cnv_ok] = cnv_z[:, cnv_positions[cnv_ok]]
+    gene_cnv_valid = np.zeros(n_genes, dtype=bool)
+    gene_cnv_valid[cnv_ok] = cnv_valid[cnv_positions[cnv_ok]]
+
+    mu_lookup_gene = {gene: position for position, gene in enumerate(mu_genes)}
+    mu_positions_gene = np.asarray(
+        [mu_lookup_gene.get(gene, -1) for gene in ge_genes], dtype=np.int64
+    )
+    mu_ok = mu_positions_gene >= 0
+    gene_mu = np.zeros((n_cells, n_genes), dtype=np.float32)
+    gene_mu[:, mu_ok] = mu_b[:, mu_positions_gene[mu_ok]]
+    gene_mu_available = mu_ok
+
     return CellFeatureSet(
         cell_ids=cell_ids,
         ge=ge_scores.astype(np.float32),
@@ -124,6 +159,13 @@ def build_cell_features(
         cnv_mask=cnv_mask,
         ge_mask=teacher["ge_observed_mask"].astype(bool),
         mu_mask=teacher["mu_observed_mask"].astype(bool),
+        gene_ids=ge_genes,
+        gene_ge=ge_z.astype(np.float32),
+        gene_mu=gene_mu,
+        gene_cnv=gene_cnv,
+        gene_ge_valid=gene_ge_valid,
+        gene_cnv_valid=gene_cnv_valid,
+        gene_mu_available=gene_mu_available,
         index={cell: position for position, cell in enumerate(cell_ids)},
     )
 
@@ -138,11 +180,14 @@ def build_drug_features(processed_dir: str | Path) -> DrugFeatureSet:
     compound_uid = [str(value) for value in arrays["compound_uid"]]
     targets = arrays["targets"].astype(bool)
     target_indices = [np.flatnonzero(row).astype(np.int64) for row in targets]
+    if "target_genes" not in arrays:
+        raise KeyError("drug_features.npz 缺少 target_genes，无法建立靶点基因映射")
     return DrugFeatureSet(
         compound_uid=compound_uid,
         morgan=arrays["morgan"].astype(np.float32),
         target_indices=target_indices,
         target_dim=int(targets.shape[1]),
+        target_genes=[str(value) for value in arrays["target_genes"]],
         graph_atom_ptr=arrays.get("graph_atom_ptr"),
         graph_edge_ptr=arrays.get("graph_edge_ptr"),
         graph_node_feat=arrays.get("graph_node_feat"),

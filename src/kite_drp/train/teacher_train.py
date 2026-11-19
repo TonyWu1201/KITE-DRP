@@ -57,7 +57,7 @@ def _build_model(
     }
     if name == "b0":
         return BilinearTeacher(**common)
-    if name in {"t0", "t0_p0"}:
+    if name in {"t0", "t0_p0", "t0_p1"}:
         return T0Teacher(
             **common,
             n_heads=int(teacher.get("n_heads", 4)),
@@ -73,8 +73,15 @@ def _build_model(
             cell_readout=str(teacher.get("cell_readout", "mean")),
             masked_modalities=bool(teacher.get("masked_modalities", False)),
             cross_gate=bool(teacher.get("cross_gate", False)),
+            shared_pathway=bool(teacher.get("shared_pathway", False)),
+            shared_pathway_proj=bool(teacher.get("shared_pathway_proj", False)),
+            use_cls_proj=bool(teacher.get("use_cls_proj", True)),
+            cls_proj_mode=str(teacher.get("cls_proj_mode", "full")),
+            cls_proj_rank=int(teacher.get("cls_proj_rank", 64)),
+            target_branch=bool(teacher.get("target_branch", False)),
+            target_gene_layers=int(teacher.get("target_gene_layers", 1)),
         )
-    raise KeyError(f"本轮只实现 b0/t0，收到 teacher={name}")
+    raise KeyError(f"本轮只实现 b0/t0/t0_p0/t0_p1，收到 teacher={name}")
 
 
 def _split_id(config: dict[str, Any]) -> str:
@@ -130,8 +137,13 @@ def _run_fold(
     neighbor_source = resolve_neighbor_source(config["teacher"], active_modalities)
     similarity_enabled = (
         bool(config.get("similarity", {}).get("enabled", True))
-        and str(config["teacher"].get("name", "t0")) in {"t0", "t0_p0"}
+        and str(config["teacher"].get("name", "t0")) in {"t0", "t0_p0", "t0_p1"}
         and bool(config["teacher"].get("use_neighbor", True))
+    )
+    target_max_tokens = (
+        int(config["teacher"].get("target_max_tokens", 64))
+        if bool(config["teacher"].get("target_branch", False))
+        else 0
     )
     if similarity_enabled:
         fold_def = next(item for item in base.split["folds"] if int(item["fold"]) == fold)
@@ -150,10 +162,17 @@ def _run_fold(
             neighbors=neighbors,
             weights=weights,
             neighbor_source=neighbor_source,
+            target_max_tokens=target_max_tokens,
+            target_modalities=active_modalities,
         )
     else:
         similarity_meta = {"enabled": False, "neighbor_source": neighbor_source}
-        tensors = build_pair_tensors(features, drugs)
+        tensors = build_pair_tensors(
+            features,
+            drugs,
+            target_max_tokens=target_max_tokens,
+            target_modalities=active_modalities,
+        )
 
     train_cfg = dict(config["train"])
     train_cfg.update(config["teacher"].get("train", {}))
@@ -254,6 +273,8 @@ def _run_fold(
         "pathway_dim": int(features.ge.shape[1]),
         "morgan_dim": int(drugs.morgan.shape[1]),
         "n_target_genes": int(drugs.target_dim),
+        "n_genes": int(features.gene_ge.shape[1]),
+        "target_max_tokens": target_max_tokens,
         "teacher": config["teacher"],
     }
     (fold_dir / "model_spec.json").write_text(

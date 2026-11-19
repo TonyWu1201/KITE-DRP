@@ -29,6 +29,56 @@ class PairTensors:
     neighbor_ge: np.ndarray | None
     neighbor_mask: np.ndarray | None
     drug_morgan: np.ndarray
+    # P1 target-aware gene branch：逐基因细胞特征 + 每药物的靶点基因表。
+    gene_ge: np.ndarray | None = None
+    gene_mu: np.ndarray | None = None
+    gene_cnv: np.ndarray | None = None
+    gene_ge_valid: np.ndarray | None = None
+    gene_cnv_valid: np.ndarray | None = None
+    gene_mu_available: np.ndarray | None = None
+    target_ids: np.ndarray | None = None  # (n_drugs, T) gene index，右侧 padding 0
+    target_mask: np.ndarray | None = None  # (n_drugs, T) bool
+    target_modalities: tuple[str, ...] = ("GE", "MU", "CNV")
+
+
+def _build_target_gene_table(
+    features: CellFeatureSet,
+    drugs: DrugFeatureSet,
+    *,
+    max_tokens: int,
+) -> tuple[np.ndarray | None, np.ndarray | None]:
+    """把每个药物的靶点基因映射到细胞基因顺序，并截断到 ``max_tokens``。"""
+    if max_tokens <= 0:
+        return None, None
+    if drugs.target_genes != features.gene_ids:
+        raise ValueError(
+            "P1 target branch 要求 drug target_genes 与 cell gene_ids 顺序一致；"
+            "当前 processed 产物不满足，需要先重映射药物靶点索引。"
+        )
+    lookup = {gene: position for position, gene in enumerate(features.gene_ids)}
+    target_to_gene = np.asarray(
+        [lookup.get(gene, -1) for gene in drugs.target_genes], dtype=np.int64
+    )
+    positions: list[np.ndarray] = []
+    for indices in drugs.target_indices:
+        mapped = target_to_gene[np.asarray(indices, dtype=np.int64)]
+        positions.append(mapped[mapped >= 0])
+    if not any(item.size for item in positions):
+        return None, None
+    width = min(max(int(item.size) for item in positions), int(max_tokens))
+    if width <= 0:
+        return None, None
+    ids = np.zeros((len(positions), width), dtype=np.int64)
+    mask = np.zeros((len(positions), width), dtype=bool)
+    # 固定种子：仅对靶点过多的药物做一次可复现的随机截断；
+    # 99% 药物靶点数 <= 106，默认 64 只会影响极少数多靶点药物。
+    rng = np.random.default_rng(20261119)
+    for row, item in enumerate(positions):
+        if item.size > width:
+            item = np.sort(rng.choice(item, size=width, replace=False))
+        ids[row, : item.size] = item
+        mask[row, : item.size] = True
+    return ids, mask
 
 
 def build_pair_tensors(
@@ -38,6 +88,8 @@ def build_pair_tensors(
     neighbors: np.ndarray | None = None,
     weights: np.ndarray | None = None,
     neighbor_source: str = "GE",
+    target_max_tokens: int = 64,
+    target_modalities: list[str] | tuple[str, ...] | None = None,
 ) -> PairTensors:
     if neighbors is not None and weights is not None:
         source = {
@@ -51,6 +103,13 @@ def build_pair_tensors(
     else:
         neighbor_ge = None
         neighbor_mask = None
+    target_ids, target_mask = _build_target_gene_table(
+        features, drugs, max_tokens=target_max_tokens
+    )
+    target_names = tuple(target_modalities or ("GE", "MU", "CNV"))
+    unknown = set(target_names) - {"GE", "MU", "CNV"}
+    if unknown:
+        raise KeyError(f"未知 target_modalities：{sorted(unknown)}")
     return PairTensors(
         cell_ge=features.ge,
         cell_mu=features.mu,
@@ -61,6 +120,15 @@ def build_pair_tensors(
         neighbor_ge=neighbor_ge,
         neighbor_mask=neighbor_mask,
         drug_morgan=drugs.morgan,
+        gene_ge=features.gene_ge,
+        gene_mu=features.gene_mu,
+        gene_cnv=features.gene_cnv,
+        gene_ge_valid=features.gene_ge_valid,
+        gene_cnv_valid=features.gene_cnv_valid,
+        gene_mu_available=features.gene_mu_available,
+        target_ids=target_ids,
+        target_mask=target_mask,
+        target_modalities=target_names,
     )
 
 
@@ -232,6 +300,40 @@ def collate_pairs(
             else None
         ),
     )
+    if tensors.target_ids is not None and tensors.target_mask is not None:
+        target_ids = tensors.target_ids[drug_idx]
+        target_mask = tensors.target_mask[drug_idx]
+        names = tensors.target_modalities
+        values = np.zeros((*target_ids.shape, 2 * len(names)), dtype=np.float32)
+        if target_ids.shape[1] > 0:
+            grid = cell_idx[:, None]
+            sources = {
+                "GE": (
+                    tensors.gene_ge,
+                    tensors.gene_ge_valid,
+                    tensors.cell_ge_mask,
+                ),
+                "MU": (
+                    tensors.gene_mu,
+                    tensors.gene_mu_available,
+                    tensors.cell_mu_mask,
+                ),
+                "CNV": (
+                    tensors.gene_cnv,
+                    tensors.gene_cnv_valid,
+                    tensors.cell_cnv_mask,
+                ),
+            }
+            for position, name in enumerate(names):
+                matrix, valid_genes, cell_mask = sources[name]
+                values[..., 2 * position] = matrix[grid, target_ids]
+                values[..., 2 * position + 1] = (
+                    cell_mask[cell_idx, None] & valid_genes[target_ids]
+                ).astype(np.float32)
+            values[~target_mask] = 0.0
+        batch.target_gene_ids = torch.from_numpy(target_ids)
+        batch.target_gene_values = torch.from_numpy(values)
+        batch.target_gene_mask = torch.from_numpy(target_mask)
     if use_gin:
         graph = _graph_batch(drug_idx, drugs)
         batch.graph_node_feat = graph.get("node_feat")  # type: ignore[assignment]
