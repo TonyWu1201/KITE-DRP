@@ -54,10 +54,35 @@ LDO batch 均验证，max |Δy| ~1e-7）。图必须先“挣出”增益。
   当前桌面/GPU 共享负载下实测约 5 min/epoch。按 3 折 × 2 seeds × 20 epochs
   估算约 10 h，**仍低于 48 h 本机运行门槛**。
 
-## 5. 评估结果
+## 5. 评估结果（LDO 快速筛选，seed 0，3 折）
 
-待补：LDO 3 折 × 2 seeds 快速筛选（P1 / T1 / random-PPI / random-DTI），
-主指标为逐药 SCC（raw LN_IC50）。
+| 变体 | global SCC | per-drug SCC | AUROC |
+|---|---:|---:|---:|
+| P1 | 0.3482 | 0.6312 | 0.6633 |
+| T1 v1（embedding 残差） | 0.3519 | 0.6414 | 0.6655 |
+| T1 v1 + graph-only blend w=0.3 | 0.3562* | 0.6444* | — |
+| **T1 v2（预测级 gate）** | **0.3614** | **0.6437** | **0.6681** |
+| T1 v2 + random PPI（fold0） | 0.3538 | 0.6233 | 0.6694 |
+| T1 v2 + random DTI（fold0） | 0.3500 | 0.6240 | 0.6674 |
+| T1 v2 去掉 cell-gene 边（fold0） | 0.3453 | **0.6242** | — |
+| graph-only 头单独（v1） | 0.350 × 3 | 0.6325* | — |
+
+\* blend/graph-only 为 val 后处理诊断，不是独立训练结果；测试集未评。
+
+- T1 v2 逐折 per-drug ΔSCC vs P1：+0.0176 / +0.0004 / +0.0196，均值 **+0.0125**；
+- **随机图对照复现了全部增益**：fold0 real 0.6232、random PPI 0.6233、
+  random DTI 0.6240；PPI/DTI 图结构对主指标没有可检测贡献；
+- fold1 的 v2 在 epoch0（P1 初始化）即最佳，5 epoch 后早停——单一学习率会把 P1
+  推离最优点；v3 已加入 `freeze_p1_epochs=5` + `p1_lr_mult=0.1`，但仅在图信号
+  成立时才有继续投入的意义；
+- `graph_pred_gate` 在 fold0/fold2 学到 ~0.35，与后处理最优 0.3–0.4 一致；
+- **结论（fold0 负对照已足够明确）**：
+  - random PPI 0.6233、random DTI 0.6240、no cell-gene 0.6242，全部 ≥ real 0.6232；
+  - 当前实现中没有证据表明 PPI/DTI/cell-gene 图结构对主指标（逐药 SCC）有贡献；
+  - T1 相对 P1 的 +0.0125 更像“额外分支/集成/正则化”的容量效应；
+  - 按计划书 R4，**P1 继续做主教师，T1 降级为附录/负对照**；若继续图方向，
+    应改为 cell-specific target 子图 + 边级自监督，而不是全局 gene 图。
+  - `t1_no_dti` / `t1_no_ppi` 去边对照仍在跑，预计不改变上述结论。
 
 ## 6. 适用范围与限制
 

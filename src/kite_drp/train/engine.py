@@ -184,11 +184,35 @@ def fit_teacher(
     grad_clip = float(config.get("grad_clip", 1.0))
     amp_enabled = bool(config.get("amp", True)) and device.type == "cuda"
 
-    optimizer = torch.optim.AdamW(
-        model.parameters(),
-        lr=float(config.get("lr", 5e-4)),
-        weight_decay=float(config.get("weight_decay", 1e-4)),
-    )
+    lr = float(config.get("lr", 5e-4))
+    weight_decay = float(config.get("weight_decay", 1e-4))
+    backbone_params = [
+        parameter for name, parameter in model.named_parameters() if name.startswith("backbone.")
+    ]
+    other_params = [
+        parameter
+        for name, parameter in model.named_parameters()
+        if not name.startswith("backbone.")
+    ]
+    p1_lr_mult = float(config.get("p1_lr_mult", 1.0))
+    if backbone_params and p1_lr_mult != 1.0:
+        # T1：P1 预训练权重用小学习率，图分支用主学习率，避免把 P1 推离最优点。
+        optimizer = torch.optim.AdamW(
+            [
+                {"params": other_params, "lr": lr, "weight_decay": weight_decay},
+                {
+                    "params": backbone_params,
+                    "lr": lr * p1_lr_mult,
+                    "weight_decay": weight_decay,
+                },
+            ]
+        )
+    else:
+        optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=weight_decay)
+    freeze_epochs = max(int(config.get("freeze_p1_epochs", 0)), 0)
+    if freeze_epochs > 0 and backbone_params:
+        for parameter in backbone_params:
+            parameter.requires_grad_(False)
     total_steps = max(int(config.get("warmup_steps", 200)), 0) + epochs * len(train_loader)
     warmup = int(config.get("warmup_steps", 200))
     scheduler = torch.optim.lr_scheduler.LambdaLR(
@@ -213,6 +237,9 @@ def fit_teacher(
     started = time.time()
 
     for epoch in range(epochs):
+        if freeze_epochs > 0 and epoch == freeze_epochs and backbone_params:
+            for parameter in backbone_params:
+                parameter.requires_grad_(True)
         model.train()
         if ema_model is not None:
             ema_model.eval()
@@ -307,6 +334,8 @@ def fit_teacher(
         "history": history,
         "ema_decay": ema_decay,
         "rank_weight": base_rank_weight,
+        "p1_lr_mult": p1_lr_mult,
+        "freeze_p1_epochs": freeze_epochs,
     }
     (run_dir / "history.json").write_text(
         json.dumps(history, ensure_ascii=False, indent=2, default=float), encoding="utf-8"

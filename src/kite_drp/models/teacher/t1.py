@@ -265,12 +265,8 @@ class T1Teacher(nn.Module):
             copied = table[self.gene_full_idx].to(self.gene_embedding.weight.device)
             # P1 的 EmbeddingBag 只训练靶点基因；非靶点行是未训练的随机值。
             # 图基因空间含 HVG/突变基因，把它们清零，避免给 PPI 传播注入噪声。
-            target_mask = torch.zeros(
-                self.n_graph_genes, dtype=torch.bool, device=copied.device
-            )
-            target_mask[
-                self.drug_target_ids_full[self.drug_target_mask_full]
-            ] = True
+            target_mask = torch.zeros(self.n_graph_genes, dtype=torch.bool, device=copied.device)
+            target_mask[self.drug_target_ids_full[self.drug_target_mask_full]] = True
             copied = copied.clone()
             copied[~target_mask] = 0.0
             self.gene_embedding.weight.data.copy_(copied)

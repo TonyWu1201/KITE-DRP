@@ -43,6 +43,9 @@ VARIANTS: dict[str, dict[str, Any]] = {
         "overrides": ("teacher.graph.rewire=dti",),
     },
     "t1_graph_only": {"teacher": "t1_graph_only", "overrides": ()},
+    "t1_no_ppi": {"teacher": "t1", "overrides": ("teacher.graph.edge_drop=ppi",)},
+    "t1_no_dti": {"teacher": "t1", "overrides": ("teacher.graph.edge_drop=dti",)},
+    "t1_no_cg": {"teacher": "t1", "overrides": ("teacher.graph.edge_drop=cg",)},
 }
 
 METRICS = {
