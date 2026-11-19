@@ -4,6 +4,9 @@ name: t0
 kind: cross_attention
 # 药物表示：Morgan FP + 靶点基因；GIN 分子图默认关闭（E-drug 消融时打开）
 drug_encoder: morgan_targets
+# E-drug 消融开关：Morgan / 靶点 / GIN 可独立关闭
+use_morgan: true
+use_targets: true
 use_gin: false
 # 靶点基因嵌入维度（18,396 × 16 ≈ 0.29M）
 target_embed_dim: 16
@@ -15,6 +18,8 @@ dropout: 0.1
 top_k: 64
 # 相似性邻居 token（H3CDR 式；可学习 gate，初始 sigmoid(0)=0.5）
 use_neighbor: true
+# 邻居上下文的来源模态；auto = 第一个启用模态（模态消融时避免信息泄漏）
+neighbor_source: auto
 modality_dropout: 0.05
 # T0 训练口径（覆盖 configs/train/teacher.yaml 的 lr/wd）
 train:

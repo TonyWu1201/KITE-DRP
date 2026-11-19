@@ -23,13 +23,14 @@ from omegaconf import OmegaConf
 from kite_drp.common.paths import REPO_ROOT
 from kite_drp.data import io
 from kite_drp.data.dataset import TeacherPairDataset
-from kite_drp.data.similarity import SimilarityConfig
 from kite_drp.train.data import build_pair_tensors, make_loader
 from kite_drp.train.engine import move_batch, resolve_device
 from kite_drp.train.features import (
     build_cell_features,
     build_drug_features,
     build_fold_similarity,
+    resolve_neighbor_source,
+    resolve_similarity_config,
 )
 from kite_drp.train.teacher_train import _build_model
 
@@ -74,7 +75,9 @@ def export_cache(
     features = build_cell_features(processed, split_id=split_id, fold=fold)
     drugs = build_drug_features(processed)
 
-    similarity_cfg = SimilarityConfig.from_dict(config.get("similarity", {}))
+    active_modalities = list(teacher_cfg.get("modalities", ["GE", "MU", "CNV"]))
+    similarity_cfg = resolve_similarity_config(config, active_modalities)
+    neighbor_source = resolve_neighbor_source(teacher_cfg, active_modalities)
     similarity_enabled = (
         bool(config.get("similarity", {}).get("enabled", True))
         and teacher_cfg["name"] == "t0"
@@ -90,7 +93,13 @@ def export_cache(
             split_id=split_id,
             fold=fold,
         )
-        tensors = build_pair_tensors(features, drugs, neighbors=neighbors, weights=weights)
+        tensors = build_pair_tensors(
+            features,
+            drugs,
+            neighbors=neighbors,
+            weights=weights,
+            neighbor_source=neighbor_source,
+        )
     else:
         tensors = build_pair_tensors(features, drugs)
 
@@ -149,12 +158,8 @@ def export_cache(
     row_index = np.concatenate(rows).astype(np.int64)
     cell_idx = base.cell_idx[row_index].astype(np.int32)
     drug_idx = base.drug_idx[row_index].astype(np.int32)
-    cell_embedding = np.divide(
-        cell_sum, np.maximum(cell_count, 1.0)[:, None]
-    ).astype(np.float16)
-    drug_embedding = np.divide(
-        drug_sum, np.maximum(drug_count, 1.0)[:, None]
-    ).astype(np.float16)
+    cell_embedding = np.divide(cell_sum, np.maximum(cell_count, 1.0)[:, None]).astype(np.float16)
+    drug_embedding = np.divide(drug_sum, np.maximum(drug_count, 1.0)[:, None]).astype(np.float16)
 
     io.write_npz(
         out / "train_pairs.npz",

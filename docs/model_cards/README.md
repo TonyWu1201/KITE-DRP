@@ -10,6 +10,7 @@
 |---|---|---|
 | [`teacher-b0.md`](teacher-b0.md) | B0 双线性基线 | ✅ v0.1（LCO 5 折，单 seed） |
 | [`teacher-t0.md`](teacher-t0.md) | T0 多模态交叉注意力教师 | ✅ v0.1（LCO 5 折，单 seed；GIN 默认关） |
+| [`teacher-t0-ablations.md`](teacher-t0-ablations.md) | T0 的 E2/E-drug/E-sim 消融报告 | ✅ 筛选 + 5 折确认（单 seed） |
 | `teacher-t1.md` | T1 统一异构图教师（主教师） | 待训练（M4） |
 | `student-a-int8.md` | A 档学生 + 动态 INT8（端侧交付） | 待蒸馏/QAT（M5） |
 | 待补 | B 档学生 / S-latent 极限档 | — |

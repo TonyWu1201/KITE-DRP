@@ -6,6 +6,8 @@ d_model: 256
 hidden: 256
 dropout: 0.1
 # 药物编码：Morgan + targets；GIN 留作 T0/T1 消融
+use_morgan: true
+use_targets: true
 use_gin: false
 # 靶点基因嵌入维度（18,396 × 16 ≈ 0.29M；避免稠密 256 维爆参数）
 target_embed_dim: 16

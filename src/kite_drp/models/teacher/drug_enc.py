@@ -92,16 +92,26 @@ class DrugEncoder(nn.Module):
         hidden: int = 256,
         dropout: float = 0.1,
         use_gin: bool = False,
+        use_morgan: bool = True,
+        use_targets: bool = True,
         gin_layers: int = 3,
         graph_node_dim: int = 77,
         graph_edge_dim: int = 4,
         target_embed_dim: int = 16,
     ) -> None:
         super().__init__()
+        if not (use_morgan or use_targets or use_gin):
+            raise ValueError("药物编码至少需要 morgan / targets / gin 之一")
         self.use_gin = use_gin
-        self.morgan = MLP(morgan_dim, [hidden], hidden, dropout=dropout)
-        self.targets = nn.EmbeddingBag(n_target_genes, target_embed_dim, mode="mean")
-        self.target_proj = nn.Linear(target_embed_dim, hidden)
+        self.use_morgan = use_morgan
+        self.use_targets = use_targets
+        self.morgan = MLP(morgan_dim, [hidden], hidden, dropout=dropout) if use_morgan else None
+        if use_targets:
+            self.targets = nn.EmbeddingBag(n_target_genes, target_embed_dim, mode="mean")
+            self.target_proj = nn.Linear(target_embed_dim, hidden)
+        else:
+            self.targets = None
+            self.target_proj = None
         self.gin = (
             MolecularGIN(
                 node_dim=graph_node_dim,
@@ -113,7 +123,7 @@ class DrugEncoder(nn.Module):
             if use_gin
             else None
         )
-        fusion_dim = hidden * (3 if use_gin else 2)
+        fusion_dim = hidden * (use_morgan + use_targets + use_gin)
         self.fuse = nn.Sequential(
             nn.Linear(fusion_dim, d_model),
             nn.GELU(),
@@ -122,18 +132,35 @@ class DrugEncoder(nn.Module):
         )
 
     def forward(self, batch: TeacherBatch) -> Tensor:
-        parts = [self.morgan(batch.morgan)]
-        parts.append(self.target_proj(self.targets(batch.target_index, batch.target_offset)))
+        parts: list[Tensor] = []
+        if self.morgan is not None:
+            parts.append(self.morgan(batch.morgan))
+        if self.targets is not None and self.target_proj is not None:
+            parts.append(self.target_proj(self.targets(batch.target_index, batch.target_offset)))
         if self.use_gin and self.gin is not None:
-            parts.append(
-                self.gin(
-                    batch.graph_node_feat,
-                    batch.graph_edge_index,
-                    batch.graph_edge_feat,
-                    batch.graph_batch,
-                    batch.graph_num_graphs,
+            num_graphs = batch.graph_num_graphs or batch.morgan.size(0)
+            if (
+                batch.graph_node_feat is None
+                or batch.graph_edge_index is None
+                or batch.graph_batch is None
+            ):
+                parts.append(
+                    torch.zeros(
+                        (num_graphs, self.gin.output_dim),
+                        dtype=self.gin.node_proj.weight.dtype,
+                        device=batch.morgan.device,
+                    )
                 )
-            )
+            else:
+                parts.append(
+                    self.gin(
+                        batch.graph_node_feat,
+                        batch.graph_edge_index,
+                        batch.graph_edge_feat,
+                        batch.graph_batch,
+                        num_graphs,
+                    )
+                )
         return self.fuse(torch.cat(parts, dim=-1))
 
 

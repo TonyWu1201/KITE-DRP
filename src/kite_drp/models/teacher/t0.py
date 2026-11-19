@@ -64,21 +64,32 @@ class T0Teacher(nn.Module):
         dropout: float = 0.1,
         top_k: int = 64,
         use_gin: bool = False,
+        use_morgan: bool = True,
+        use_targets: bool = True,
         use_neighbor: bool = True,
         modality_dropout: float = 0.1,
         target_embed_dim: int = 16,
         readout: str = "sum",
         use_dense_shortcut: bool = False,
+        modalities: list[str] | tuple[str, ...] | None = None,
     ) -> None:
         super().__init__()
+        if isinstance(modalities, str):
+            modalities = [modalities]
+        self.modalities = tuple(modalities or ("GE", "MU", "CNV"))
+        if not self.modalities:
+            raise ValueError("T0 至少需要一个组学模态")
+        unknown = set(self.modalities) - {"GE", "MU", "CNV"}
+        if unknown:
+            raise KeyError(f"未知模态：{sorted(unknown)}")
         self.encoders = nn.ModuleList(
             [
                 PathwayTokenEncoder(pathway_dim, d_model, top_k=top_k, dropout=dropout)
-                for _ in range(3)
+                for _ in self.modalities
             ]
         )
         self.missing_tokens = nn.ParameterList(
-            [nn.Parameter(torch.zeros(1, 1, d_model)) for _ in range(3)]
+            [nn.Parameter(torch.zeros(1, 1, d_model)) for _ in self.modalities]
         )
         self.missing_cnv = nn.Parameter(torch.zeros(1, 1, d_model))
         self.drug = DrugEncoder(
@@ -88,17 +99,17 @@ class T0Teacher(nn.Module):
             hidden=hidden,
             dropout=dropout,
             use_gin=use_gin,
+            use_morgan=use_morgan,
+            use_targets=use_targets,
             target_embed_dim=target_embed_dim,
         )
-        self.cross_attn = nn.MultiheadAttention(
-            d_model, n_heads, dropout=dropout, batch_first=True
-        )
+        self.cross_attn = nn.MultiheadAttention(d_model, n_heads, dropout=dropout, batch_first=True)
         self.cross_norm = nn.LayerNorm(d_model)
         self.dropout = nn.Dropout(dropout)
         self.use_dense_shortcut = bool(use_dense_shortcut)
         if self.use_dense_shortcut:
             self.dense_cell = nn.Sequential(
-                nn.Linear(d_model * 3, d_model),
+                nn.Linear(d_model * len(self.modalities), d_model),
                 nn.GELU(),
                 nn.Dropout(dropout),
                 nn.LayerNorm(d_model),
@@ -135,16 +146,15 @@ class T0Teacher(nn.Module):
         return tokens * (1.0 - drop) + missing * drop
 
     def forward(self, batch: TeacherBatch) -> TeacherOutput:
-        ge_tokens = self._maybe_drop(self.encoders[0](batch.ge), 0)
-        mu_tokens = self._maybe_drop(self.encoders[1](batch.mu), 1)
-
-        cnv_tokens = self.encoders[2](batch.cnv)
-        mask = batch.cnv_mask.view(-1, 1, 1).to(cnv_tokens.dtype)
-        cnv_tokens = cnv_tokens * mask + self.missing_cnv.expand_as(cnv_tokens) * (1.0 - mask)
-        cnv_tokens = self._maybe_drop(cnv_tokens, 2)
-
-        omics = [ge_tokens, mu_tokens, cnv_tokens]
-        cls_tokens = torch.cat([ge_tokens[:, 0], mu_tokens[:, 0], cnv_tokens[:, 0]], dim=-1)
+        inputs = {"GE": batch.ge, "MU": batch.mu, "CNV": batch.cnv}
+        omics: list[Tensor] = []
+        for index, name in enumerate(self.modalities):
+            tokens = self.encoders[index](inputs[name])
+            if name == "CNV":
+                mask = batch.cnv_mask.view(-1, 1, 1).to(tokens.dtype)
+                tokens = tokens * mask + self.missing_cnv.expand_as(tokens) * (1.0 - mask)
+            omics.append(self._maybe_drop(tokens, index))
+        cls_tokens = torch.cat([tokens[:, 0] for tokens in omics], dim=-1)
         if self.use_neighbor and batch.neighbor_ge is not None:
             gate = torch.sigmoid(self.neighbor_gate)
             neighbor = self.neighbor_proj(batch.neighbor_ge).unsqueeze(1)

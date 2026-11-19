@@ -48,13 +48,42 @@ class BilinearTeacher(nn.Module):
         hidden: int = 256,
         dropout: float = 0.1,
         use_gin: bool = False,
+        use_morgan: bool = True,
+        use_targets: bool = True,
         target_embed_dim: int = 16,
+        modalities: list[str] | tuple[str, ...] | None = None,
     ) -> None:
         super().__init__()
-        self.ge = ModalityProjector(pathway_dim, hidden, dropout=dropout)
-        self.mu = ModalityProjector(pathway_dim, hidden, dropout=dropout)
-        self.cnv = ModalityProjector(pathway_dim, hidden, dropout=dropout)
-        self.cell = MLP(hidden * 3, [d_model * 2], d_model, dropout=dropout, final_norm=True)
+        if isinstance(modalities, str):
+            modalities = [modalities]
+        self.modalities = tuple(modalities or ("GE", "MU", "CNV"))
+        if not self.modalities:
+            raise ValueError("B0 至少需要一个组学模态")
+        unknown = set(self.modalities) - {"GE", "MU", "CNV"}
+        if unknown:
+            raise KeyError(f"未知模态：{sorted(unknown)}")
+        self.ge = (
+            ModalityProjector(pathway_dim, hidden, dropout=dropout)
+            if "GE" in self.modalities
+            else None
+        )
+        self.mu = (
+            ModalityProjector(pathway_dim, hidden, dropout=dropout)
+            if "MU" in self.modalities
+            else None
+        )
+        self.cnv = (
+            ModalityProjector(pathway_dim, hidden, dropout=dropout)
+            if "CNV" in self.modalities
+            else None
+        )
+        self.cell = MLP(
+            hidden * len(self.modalities),
+            [d_model * 2],
+            d_model,
+            dropout=dropout,
+            final_norm=True,
+        )
         self.drug = DrugEncoder(
             morgan_dim=morgan_dim,
             n_target_genes=n_target_genes,
@@ -62,6 +91,8 @@ class BilinearTeacher(nn.Module):
             hidden=hidden,
             dropout=dropout,
             use_gin=use_gin,
+            use_morgan=use_morgan,
+            use_targets=use_targets,
             target_embed_dim=target_embed_dim,
         )
         self.heads = ResponseHeads(d_model, hidden=d_model // 2, dropout=dropout)
@@ -69,16 +100,14 @@ class BilinearTeacher(nn.Module):
         self.d_model = d_model
 
     def forward(self, batch: TeacherBatch) -> TeacherOutput:
-        z_cell = self.cell(
-            torch.cat(
-                [
-                    self.ge(batch.ge),
-                    self.mu(batch.mu),
-                    self.cnv(batch.cnv, batch.cnv_mask),
-                ],
-                dim=-1,
-            )
-        )
+        parts: list[Tensor] = []
+        if self.ge is not None:
+            parts.append(self.ge(batch.ge))
+        if self.mu is not None:
+            parts.append(self.mu(batch.mu))
+        if self.cnv is not None:
+            parts.append(self.cnv(batch.cnv, batch.cnv_mask))
+        z_cell = self.cell(torch.cat(parts, dim=-1))
         z_drug = self.drug(batch)
         z_pair = z_cell * z_drug
         y_hat = (z_cell * z_drug).sum(dim=-1) / math.sqrt(self.d_model) + self.bias

@@ -19,7 +19,6 @@ from omegaconf import DictConfig, OmegaConf
 
 from kite_drp.common.paths import CONFIGS_DIR, REPO_ROOT
 from kite_drp.data.dataset import TeacherPairDataset
-from kite_drp.data.similarity import SimilarityConfig
 from kite_drp.models.teacher.b0 import BilinearTeacher
 from kite_drp.models.teacher.common import count_parameters
 from kite_drp.models.teacher.t0 import T0Teacher
@@ -29,6 +28,8 @@ from kite_drp.train.features import (
     build_cell_features,
     build_drug_features,
     build_fold_similarity,
+    resolve_neighbor_source,
+    resolve_similarity_config,
 )
 
 
@@ -49,7 +50,10 @@ def _build_model(
         "hidden": int(teacher.get("hidden", 256)),
         "dropout": float(teacher.get("dropout", 0.1)),
         "use_gin": bool(teacher.get("use_gin", False)),
+        "use_morgan": bool(teacher.get("use_morgan", True)),
+        "use_targets": bool(teacher.get("use_targets", True)),
         "target_embed_dim": int(teacher.get("target_embed_dim", 16)),
+        "modalities": list(teacher.get("modalities", ["GE", "MU", "CNV"])),
     }
     if name == "b0":
         return BilinearTeacher(**common)
@@ -75,8 +79,20 @@ def _split_id(config: dict[str, Any]) -> str:
 
 def _fold_list(config: dict[str, Any], total: int) -> list[int]:
     value = config.get("fold", 0)
-    if value == "all":
-        return list(range(total))
+    if isinstance(value, str):
+        text = value.strip()
+        if text == "all":
+            return list(range(total))
+        if "," in text:
+            folds = sorted({int(item) for item in text.split(",") if item.strip()})
+            if any(fold < 0 or fold >= total for fold in folds):
+                raise ValueError(f"fold 越界：{folds}（共 {total} 折）")
+            return folds
+    elif isinstance(value, (list, tuple)):
+        folds = sorted({int(item) for item in value})
+        if any(fold < 0 or fold >= total for fold in folds):
+            raise ValueError(f"fold 越界：{folds}（共 {total} 折）")
+        return folds
     return [int(value)]
 
 
@@ -102,7 +118,9 @@ def _run_fold(
     features = build_cell_features(processed, split_id=split_id, fold=fold)
     drugs = build_drug_features(processed)
 
-    similarity_cfg = SimilarityConfig.from_dict(config.get("similarity", {}))
+    active_modalities = list(config["teacher"].get("modalities", ["GE", "MU", "CNV"]))
+    similarity_cfg = resolve_similarity_config(config, active_modalities)
+    neighbor_source = resolve_neighbor_source(config["teacher"], active_modalities)
     similarity_enabled = (
         bool(config.get("similarity", {}).get("enabled", True))
         and str(config["teacher"].get("name", "t0")) == "t0"
@@ -119,9 +137,15 @@ def _run_fold(
             fold=fold,
             cache_dir=REPO_ROOT / paths["interim_dir"] / "teacher" / "similarity",
         )
-        tensors = build_pair_tensors(features, drugs, neighbors=neighbors, weights=weights)
+        tensors = build_pair_tensors(
+            features,
+            drugs,
+            neighbors=neighbors,
+            weights=weights,
+            neighbor_source=neighbor_source,
+        )
     else:
-        similarity_meta = {"enabled": False}
+        similarity_meta = {"enabled": False, "neighbor_source": neighbor_source}
         tensors = build_pair_tensors(features, drugs)
 
     train_cfg = dict(config["train"])
@@ -226,9 +250,7 @@ def main(config: DictConfig) -> None:
     results = []
     for fold in folds:
         print(json.dumps({"start_fold": fold, "split": split_id}), flush=True)
-        results.append(
-            _run_fold(resolved, fold=fold, split_id=split_id, run_dir=output_dir)
-        )
+        results.append(_run_fold(resolved, fold=fold, split_id=split_id, run_dir=output_dir))
 
     summary = {
         "variant": resolved["teacher"]["name"],
@@ -241,11 +263,7 @@ def main(config: DictConfig) -> None:
             for key in ("r2", "pcc", "scc", "rmse")
         }
         | {
-            key: float(
-                np.nanmean(
-                    [result["val"]["classification"][key] for result in results]
-                )
-            )
+            key: float(np.nanmean([result["val"]["classification"][key] for result in results]))
             for key in ("auroc", "auprc", "ece")
         },
     }

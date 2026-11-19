@@ -33,12 +33,17 @@ def build_pair_tensors(
     *,
     neighbors: np.ndarray | None = None,
     weights: np.ndarray | None = None,
+    neighbor_source: str = "GE",
 ) -> PairTensors:
-    neighbor_ge = (
-        neighbor_scores(features.ge, neighbors, weights)
-        if neighbors is not None and weights is not None
-        else None
-    )
+    if neighbors is not None and weights is not None:
+        source = {
+            "GE": features.ge,
+            "MU": features.mu,
+            "CNV": features.cnv,
+        }[neighbor_source]
+        neighbor_ge = neighbor_scores(source, neighbors, weights)
+    else:
+        neighbor_ge = None
     return PairTensors(
         cell_ge=features.ge,
         cell_mu=features.mu,
@@ -65,9 +70,7 @@ class PairDataset(Dataset):
         return int(self.indices[position])
 
 
-def _graph_batch(
-    drug_indices: np.ndarray, drugs: DrugFeatureSet
-) -> dict[str, torch.Tensor | int]:
+def _graph_batch(drug_indices: np.ndarray, drugs: DrugFeatureSet) -> dict[str, torch.Tensor | int]:
     if (
         drugs.graph_atom_ptr is None
         or drugs.graph_edge_ptr is None
@@ -180,9 +183,7 @@ def make_loader(
     generator = torch.Generator().manual_seed(seed) if shuffle else None
 
     def _collate(indices: list[int]) -> TeacherBatch:
-        return collate_pairs(
-            indices, base=base, tensors=tensors, drugs=drugs, use_gin=use_gin
-        )
+        return collate_pairs(indices, base=base, tensors=tensors, drugs=drugs, use_gin=use_gin)
 
     return DataLoader(
         dataset,

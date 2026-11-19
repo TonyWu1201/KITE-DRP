@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import contextlib
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -144,19 +145,44 @@ def build_drug_features(processed_dir: str | Path) -> DrugFeatureSet:
         graph_edge_index=arrays.get("graph_edge_index"),
         graph_edge_feat=arrays.get("graph_edge_feat"),
         graph_has_graph=(
-            arrays["graph_has_graph"].astype(bool)
-            if "graph_has_graph" in arrays
-            else None
+            arrays["graph_has_graph"].astype(bool) if "graph_has_graph" in arrays else None
         ),
         index={uid: position for position, uid in enumerate(compound_uid)},
     )
 
 
-def neighbor_scores(
-    scores: np.ndarray, neighbors: np.ndarray, weights: np.ndarray
-) -> np.ndarray:
+def neighbor_scores(scores: np.ndarray, neighbors: np.ndarray, weights: np.ndarray) -> np.ndarray:
     """``sum_k w_ik * scores[neighbors_ik]``。"""
     return np.einsum("nk,nkp->np", weights, scores[neighbors]).astype(np.float32)
+
+
+def resolve_similarity_config(
+    config: dict[str, Any], active_modalities: list[str] | tuple[str, ...]
+) -> SimilarityConfig:
+    """相似性只用当前启用的组学模态；CNV 缺失时自动退化为 GE/MU 可用项。"""
+    payload = dict(config.get("similarity", {}))
+    requested = list(payload.get("modalities", ["GE", "MU"]))
+    names = [name for name in requested if name in set(active_modalities)]
+    if not names:
+        names = [name for name in active_modalities if name != "CNV"]
+    if not names:
+        raise ValueError(f"相似性没有可用模态：active={active_modalities}")
+    payload["modalities"] = names
+    return SimilarityConfig.from_dict(payload)
+
+
+def resolve_neighbor_source(
+    config: dict[str, Any], active_modalities: list[str] | tuple[str, ...]
+) -> str:
+    """邻居上下文取自哪个模态；``auto`` 用第一个启用模态。"""
+    value = str(config.get("neighbor_source", "auto"))
+    if value == "auto":
+        for name in ("GE", "MU", "CNV"):
+            if name in active_modalities:
+                return name
+    if value not in active_modalities:
+        raise ValueError(f"neighbor_source={value} 不在启用模态 {active_modalities} 中")
+    return value
 
 
 def build_fold_similarity(
@@ -177,9 +203,7 @@ def build_fold_similarity(
     if train_idx.size == 0:
         raise ValueError(f"fold {fold} 的 train 细胞与教师池无交集")
     if train_idx.size <= config.top_n:
-        raise ValueError(
-            f"train 细胞数 {train_idx.size} 不足以取 top_n={config.top_n} 个邻居"
-        )
+        raise ValueError(f"train 细胞数 {train_idx.size} 不足以取 top_n={config.top_n} 个邻居")
     is_train = np.zeros(len(features.cell_ids), dtype=bool)
     is_train[train_idx] = True
     query_idx = np.flatnonzero(~is_train)
@@ -191,9 +215,7 @@ def build_fold_similarity(
             "相似性包含 CNV，但教师池存在 CNV 缺失细胞；请用 pool=M-509 或改 modalities=[GE, MU]"
         )
     train_scores = {name: scores[name][train_idx] for name in names}
-    query_scores = (
-        {name: scores[name][query_idx] for name in names} if query_idx.size else None
-    )
+    query_scores = {name: scores[name][query_idx] for name in names} if query_idx.size else None
     fit = fit_cell_similarity(train_scores, query_scores, config=config)
 
     n_rows = len(features.cell_ids)
@@ -221,14 +243,16 @@ def build_fold_similarity(
     if cache_dir is not None:
         target_dir = Path(cache_dir) / split_id / f"fold{fold}"
         target_dir.mkdir(parents=True, exist_ok=True)
-        save_similarity(
-            target_dir / "cell_similarity.npz",
-            cell_ids=features.cell_ids,
-            is_train=is_train,
-            neighbors=neighbors,
-            weights=weights,
-            meta=meta,
-        )
+        # 缓存非必需；并发 worker 同时写同一 fold 时 Windows 可能拒绝 replace。
+        with contextlib.suppress(OSError):
+            save_similarity(
+                target_dir / "cell_similarity.npz",
+                cell_ids=features.cell_ids,
+                is_train=is_train,
+                neighbors=neighbors,
+                weights=weights,
+                meta=meta,
+            )
     return neighbors, weights, is_train, meta
 
 
@@ -240,4 +264,6 @@ __all__ = [
     "build_fold_similarity",
     "cell_scores",
     "neighbor_scores",
+    "resolve_neighbor_source",
+    "resolve_similarity_config",
 ]

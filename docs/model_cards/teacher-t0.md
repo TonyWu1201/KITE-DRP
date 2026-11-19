@@ -18,7 +18,7 @@
 
 ## 2. 结构
 
-1. 每个模态：`[CLS] + top-32 通路 token`（通路嵌入 + 分数投影 + 模态类型嵌入）；
+1. 每个模态：`[CLS] + top-64 通路 token`（通路嵌入 + 分数投影 + 模态类型嵌入）；
 2. 药物 token 作 query，对组学 token 做交叉注意力；
 3. 拼接 `[药物, GE, MU, CNV, 邻居]` 后过 2 层 TransformerEncoder（d=256, 4 heads）；
 4. `z_cell = mean(组学 token)`，`z_drug = 药物 token + 残差`，`z_pair = z_cell + z_drug`；
@@ -28,7 +28,7 @@
 
 - 相似性：H3CDR 式 GE+MU 高斯核 → 归一化全核 → top-15 → 3 轮交叉融合；
   **fit 只在 train 细胞**，val/test 只连 train 锚点（`docs/adr/0005`、`data/similarity.py`）。
-- 损失：Huber + 0.5 × masked BCE；AdamW lr=2e-4、wd=1e-3、dropout=0.2、
+- 损失：Huber + 0.5 × masked BCE；AdamW lr=2e-4、wd=1e-3、dropout=0.1、
   模态 dropout=0.05、batch=512、AMP；早停 val SCC（patience 5）。
 
 ## 4. 评估结果（LCO `p1_lco_s0`，5 折，单 seed）
@@ -41,12 +41,19 @@
 | AUROC | 0.704 ± 0.020 | val |
 | RMSE | 0.914 | val |
 
-**E-sim（fold0，同配置 8 epochs）**：有邻居 token SCC=0.424 / R²=0.170；
-去掉邻居 SCC=0.390 / R²=0.073 → 相似性上下文在该折有正向贡献；
-但 5 折上 T0 与 B0 几乎持平（B0 SCC 0.440），尚不能宣称注意力结构更优。
+**消融（详见 [`teacher-t0-ablations.md`](teacher-t0-ablations.md)）**：
+
+- 5 折去掉邻居 token：SCC 0.415 vs 0.427（Δ−0.013，p=0.37），
+  R² 0.170 vs 0.178（Δ−0.008，p=0.66）→ 方向为正但不显著；
+- 5 折 GE-only：SCC 0.438 vs 0.427（p=0.53），R² 0.176 vs 0.178，
+  参数 3.70M vs 4.73M → 多组学在教师精度上无显著增益；
+- 5 折 T0 vs B0：SCC 0.427 vs 0.440（p=0.27）→ 交叉注意力结构未显著优于双线性基线。
+
+因此论文中必须如实报告“多组学/注意力/相似性 token 的边际增益不显著”；
+教师侧的差异化留给 T1 图结构或蒸馏实验检验。
 
 ## 5. 适用范围与限制
 
 - 当前仅 LCO、单 seed；LDO/scaffold 与 ≥3 seeds 待 E1/E7/E12。
-- 未启用 GIN（`use_gin=false`）；E-drug 消融时再打开。
+- 未启用 GIN：单折 E-drug 筛查中 GIN 增加 0.88M 参数但没有收益，默认保持关闭。
 - **科研原型，不用于临床诊断或治疗决策**。

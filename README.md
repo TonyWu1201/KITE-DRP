@@ -210,6 +210,8 @@ uv run uvicorn app.main:app --host 127.0.0.1 --port 8000
   uv run python -m kite_drp.train.teacher_train teacher=t0 split=lco fold=all seed=0
   # 消融示例：关闭相似性邻居 token（E-sim）
   uv run python -m kite_drp.train.teacher_train teacher=t0 teacher.use_neighbor=false
+  # 批量消融（E2 模态 / E-drug / E-sim；默认折 0+2、10 epochs、2 workers）
+  uv run python scripts/run_ablations.py --suite all --folds 0,2 --epochs 10
   # 学生 A 档 + 输出软标签蒸馏（待实现）
   uv run python -m kite_drp.train.student_train --config-name config student=a kd=default
   ```

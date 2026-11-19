@@ -70,3 +70,48 @@ def test_parameter_budget() -> None:
     t0 = T0Teacher(pathway_dim=1000, morgan_dim=2048, n_target_genes=18396)
     assert count_parameters(b0) < 3_000_000
     assert count_parameters(t0) < 5_000_000
+
+
+@pytest.mark.parametrize("model_cls", [BilinearTeacher, T0Teacher])
+def test_modality_subset_reduces_parameters(model_cls) -> None:
+    """模态消融要真正去掉分支参数，而不只是把输入置零。"""
+    kwargs = {
+        "pathway_dim": 64,
+        "morgan_dim": 128,
+        "n_target_genes": 50,
+        "d_model": 32,
+        "hidden": 32,
+        "dropout": 0.0,
+        "target_embed_dim": 8,
+    }
+    if model_cls is T0Teacher:
+        kwargs.update(use_neighbor=False, n_heads=4, n_layers=1, top_k=8)
+    extra: dict = {}
+    full = model_cls(**kwargs, modalities=["GE", "MU", "CNV"], **extra)
+    ge_only = model_cls(**kwargs, modalities=["GE"], **extra)
+    assert count_parameters(ge_only) < count_parameters(full)
+    output = ge_only(_batch())
+    assert output.y_hat.shape == (4,)
+    assert torch.isfinite(output.y_hat).all()
+
+
+def test_drug_input_ablation() -> None:
+    common = {
+        "pathway_dim": 64,
+        "morgan_dim": 128,
+        "n_target_genes": 50,
+        "d_model": 32,
+        "hidden": 32,
+        "dropout": 0.0,
+        "target_embed_dim": 8,
+        "n_heads": 4,
+        "n_layers": 1,
+        "top_k": 8,
+        "use_neighbor": False,
+    }
+    batch = _batch()
+    for use_morgan, use_targets in ((True, False), (False, True)):
+        model = T0Teacher(**common, use_morgan=use_morgan, use_targets=use_targets)
+        output = model(batch)
+        assert output.y_hat.shape == (4,)
+        assert torch.isfinite(output.y_hat).all()
