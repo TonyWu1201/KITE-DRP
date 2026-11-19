@@ -23,7 +23,16 @@ class TeacherBatch:
     cls_mask: Tensor
     row_index: Tensor | None = None
     label_mask: Tensor | None = None
+    drug_idx: Tensor | None = None
+    ge_mask: Tensor | None = None
+    mu_mask: Tensor | None = None
     neighbor_ge: Tensor | None = None
+    neighbor_mask: Tensor | None = None
+    neighbor_confidence: Tensor | None = None
+    # P1 target-aware gene branch：每对 (drug, cell) 的靶点基因表。
+    target_gene_ids: Tensor | None = None
+    target_gene_values: Tensor | None = None  # (B, T, 2×M)：每个模态值 + availability flag
+    target_gene_mask: Tensor | None = None
     graph_node_feat: Tensor | None = None
     graph_edge_index: Tensor | None = None
     graph_edge_feat: Tensor | None = None

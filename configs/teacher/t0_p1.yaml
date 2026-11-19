@@ -1,0 +1,64 @@
+# @package teacher
+# T0 P1：target-aware gene branch + 低秩 cls_proj（无共享 pathway 表）。
+#
+# 设计依据（plans&notes/2026-11-19_T0架构与设计不足.md §2.1/§2.3/§4 P1）：
+# - 药物侧是 18,396 个靶点基因 ID，细胞侧只有 1,000 维通路分数，缺少共享基因空间；
+# - cls_proj 是 1000×256/模态，占总参数比例过高。
+#
+# P1 改动（2026-11-19 fold0 快速筛查后定稿）：
+# 1. 每个 (drug, cell) pair 取该药物靶点基因对应的细胞 GE/MU/CNV 逐基因值，
+#    经共享基因 ID 嵌入 + 1 层 target self-attention + attention pooling 得到 target token；
+# 2. 基因 ID 嵌入与药物编码器的靶点 EmbeddingBag 共享同一张权重表；
+# 3. cls_proj 改为三模态共享低秩投影（1000→64→256），保留输入相关全局摘要，
+#    参数从 3×256k 降到 80k；
+# 4. 共享 pathway embedding 在 quick screen 中低于独立通路表（0.386 vs 0.428 SCC，
+#    fold0），因此默认关闭；开关保留在 shared_pathway。
+#
+# 读出沿用 P0-lite 的 sum（hybrid 在 P0 quick screen 中明显负贡献），
+# 排序损失默认关闭（P0 中不稳定）。
+name: t0_p1
+variant: t0_p1
+kind: cross_attention
+drug_encoder: morgan_targets
+use_morgan: true
+use_targets: true
+use_gin: false
+target_embed_dim: 16
+d_model: 256
+n_heads: 4
+n_layers: 2
+dropout: 0.1
+top_k: 64
+use_neighbor: true
+neighbor_source: auto
+modality_dropout: 0.15
+# P0 结构修复
+token_types: true
+rank_embedding: true
+cell_readout: attention
+masked_modalities: true
+cross_gate: true
+readout: sum
+use_dense_shortcut: false
+# P1 结构
+# 独立 pathway embedding：quick screen 中明显优于共享表，默认关闭共享。
+shared_pathway: false
+shared_pathway_proj: false
+use_cls_proj: true
+cls_proj_mode: lowrank
+cls_proj_rank: 64
+target_branch: true
+target_gene_layers: 1
+# target token 的初始 gate=0，从“无贡献”开始学习
+# 每个药物最多保留的靶点基因 token 数；99% 药物 <= 106，64 只截断极少数多靶点药物
+target_max_tokens: 64
+modalities: [GE, MU, CNV]
+params_target: 5_000_000
+train:
+  lr: 1.5e-4
+  weight_decay: 1.0e-3
+  rank_weight: 0.0
+  cls_weight: 0.5
+  group_by_drug: false
+  ema_decay: 0.0
+  min_epochs: 5

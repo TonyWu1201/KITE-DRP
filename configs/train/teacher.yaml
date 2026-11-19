@@ -15,3 +15,18 @@ monitor: val_scc
 monitor_mode: max
 huber_delta: 1.0
 cls_weight: 0.5
+# P0：同药物内 pairwise ranking（默认关闭，保持 v1 旧结果可复现）
+rank_weight: 0.0
+rank_temperature: 1.0
+rank_min_delta: 0.1
+rank_max_pairs: 1024
+rank_warmup_epochs: 0
+# rank_weight > 0 时默认启用，也可显式指定
+group_by_drug: false
+drugs_per_batch: 8
+cells_per_drug: 64
+# EMA / 最小训练轮数（默认关闭）
+ema_decay: 0.0
+min_epochs: 0
+# test 只在最终模型上开启；默认不评，避免泄漏
+eval_test: false

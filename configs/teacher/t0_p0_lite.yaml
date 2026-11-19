@@ -1,0 +1,44 @@
+# @package teacher
+# T0 P0-lite：保留 P0 中不伤精度的结构修复；排序损失默认关闭。
+#
+# 2026-11-19 快速验证（LCO folds 0/2，2 seeds，5 epochs）：
+# - 完整 P0（hybrid + rank 0.5）SCC 0.374，明显低于 T0 v1 0.428；
+# - sum readout + 8 drugs x 64 cells + no-rank 的 P0-lite SCC 0.410，
+#   T0 v1 0.414（2 seeds x 2 folds），R² 0.166 vs 0.155；
+# - 排序损失在 quick screen 中不稳定/无增益，故本配置 rank_weight=0。
+name: t0_p0
+variant: t0_p0_lite
+kind: cross_attention
+drug_encoder: morgan_targets
+use_morgan: true
+use_targets: true
+use_gin: false
+target_embed_dim: 16
+d_model: 256
+n_heads: 4
+n_layers: 2
+dropout: 0.1
+top_k: 64
+use_neighbor: true
+neighbor_source: auto
+modality_dropout: 0.15
+token_types: true
+rank_embedding: true
+cell_readout: attention
+masked_modalities: true
+cross_gate: true
+# P0-lite：hybrid readout 在 quick screen 中是主要负贡献，改回 sum
+readout: sum
+use_dense_shortcut: false
+modalities: [GE, MU, CNV]
+params_target: 5_000_000
+train:
+  lr: 1.5e-4
+  weight_decay: 1.0e-3
+  rank_weight: 0.0
+  cls_weight: 0.5
+  group_by_drug: true
+  drugs_per_batch: 8
+  cells_per_drug: 64
+  ema_decay: 0.0
+  min_epochs: 5

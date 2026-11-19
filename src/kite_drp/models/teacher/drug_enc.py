@@ -98,6 +98,7 @@ class DrugEncoder(nn.Module):
         graph_node_dim: int = 77,
         graph_edge_dim: int = 4,
         target_embed_dim: int = 16,
+        target_embedding: nn.Embedding | None = None,
     ) -> None:
         super().__init__()
         if not (use_morgan or use_targets or use_gin):
@@ -108,6 +109,9 @@ class DrugEncoder(nn.Module):
         self.morgan = MLP(morgan_dim, [hidden], hidden, dropout=dropout) if use_morgan else None
         if use_targets:
             self.targets = nn.EmbeddingBag(n_target_genes, target_embed_dim, mode="mean")
+            if target_embedding is not None:
+                # P1：与细胞侧 target gene token 共享同一张基因 ID 嵌入表。
+                self.targets.weight = target_embedding.weight
             self.target_proj = nn.Linear(target_embed_dim, hidden)
         else:
             self.targets = None

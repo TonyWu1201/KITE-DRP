@@ -53,10 +53,210 @@ class Variant:
     suite: str
     overrides: tuple[str, ...] = field(default_factory=tuple)
     note: str = ""
+    teacher: str = "t0"
 
 
 VARIANTS: tuple[Variant, ...] = (
     Variant("t0_full", "reference", (), "完整 T0（参照）"),
+    Variant("b0_full", "reference", (), "B0 双线性基线", teacher="b0"),
+    # P0：排序损失 / token-readout / 缺失 mask / 逐折 seed
+    Variant(
+        "b0_rank",
+        "rank",
+        (
+            "train.rank_weight=0.5",
+            "train.rank_warmup_epochs=2",
+            "train.cls_weight=0.5",
+            "train.group_by_drug=true",
+            "train.drugs_per_batch=4",
+            "train.cells_per_drug=128",
+            "train.ema_decay=0.0",
+        ),
+        "B0 + 排序损失（公平对照）",
+        teacher="b0",
+    ),
+    Variant(
+        "t0_rank",
+        "rank",
+        (
+            "train.rank_weight=0.5",
+            "train.rank_warmup_epochs=2",
+            "train.cls_weight=0.5",
+            "train.group_by_drug=true",
+            "train.drugs_per_batch=4",
+            "train.cells_per_drug=128",
+            "train.ema_decay=0.0",
+        ),
+        "T0 v1 + 排序损失（只隔离 loss）",
+        teacher="t0",
+    ),
+    Variant("t0_p0", "p0", (), "T0 P0 完整", teacher="t0_p0"),
+    Variant("t0_p0_lite", "p0", (), "T0 P0-lite（推荐）", teacher="t0_p0_lite"),
+    Variant(
+        "t0_p0_no_rank",
+        "p0",
+        ("teacher.train.rank_weight=0.0",),
+        "T0 P0 去掉排序损失",
+        teacher="t0_p0",
+    ),
+    Variant(
+        "t0_rank02",
+        "rank",
+        (
+            "train.rank_weight=0.2",
+            "train.rank_warmup_epochs=2",
+            "train.cls_weight=0.5",
+            "train.group_by_drug=true",
+            "train.drugs_per_batch=4",
+            "train.cells_per_drug=128",
+            "train.ema_decay=0.0",
+        ),
+        "T0 v1 + 低权重排序损失",
+        teacher="t0",
+    ),
+    Variant(
+        "t0_p0_sum",
+        "p0_diag",
+        ("teacher.readout=sum",),
+        "P0 去掉 hybrid readout",
+        teacher="t0_p0",
+    ),
+    Variant(
+        "t0_p0_mean",
+        "p0_diag",
+        ("teacher.cell_readout=mean",),
+        "P0 去掉 attention pooling",
+        teacher="t0_p0",
+    ),
+    Variant(
+        "t0_p0_drop05",
+        "p0_diag",
+        ("teacher.modality_dropout=0.05",),
+        "P0 降低 modality dropout",
+        teacher="t0_p0",
+    ),
+    Variant(
+        "t0_grouped",
+        "p0_diag",
+        (
+            "train.rank_weight=0.0",
+            "train.group_by_drug=true",
+            "train.drugs_per_batch=4",
+            "train.cells_per_drug=128",
+            "train.ema_decay=0.0",
+        ),
+        "T0 v1 + grouped sampler（无 rank）",
+        teacher="t0",
+    ),
+    Variant(
+        "t0_p0_sum_no_rank",
+        "p0_diag",
+        ("teacher.readout=sum", "teacher.train.rank_weight=0.0"),
+        "P0 sum readout，无 rank",
+        teacher="t0_p0",
+    ),
+    Variant(
+        "t0_p0_sum_rank02",
+        "p0_diag",
+        ("teacher.readout=sum", "teacher.train.rank_weight=0.2"),
+        "P0 sum readout + 低权重 rank",
+        teacher="t0_p0",
+    ),
+    Variant(
+        "t0_grouped_8x64",
+        "p0_diag",
+        (
+            "train.rank_weight=0.0",
+            "train.group_by_drug=true",
+            "train.drugs_per_batch=8",
+            "train.cells_per_drug=64",
+            "train.ema_decay=0.0",
+        ),
+        "T0 v1 + 8x64 grouped sampler（更多药物多样性）",
+        teacher="t0",
+    ),
+    Variant(
+        "t0_p0_sum_no_rank_8x64",
+        "p0_diag",
+        (
+            "teacher.readout=sum",
+            "teacher.train.rank_weight=0.0",
+            "teacher.train.drugs_per_batch=8",
+            "teacher.train.cells_per_drug=64",
+        ),
+        "P0 sum，无 rank，8x64 sampler",
+        teacher="t0_p0",
+    ),
+    Variant(
+        "t0_p0_sum_rank02_8x64",
+        "p0_diag",
+        (
+            "teacher.readout=sum",
+            "teacher.train.rank_weight=0.2",
+            "teacher.train.drugs_per_batch=8",
+            "teacher.train.cells_per_drug=64",
+        ),
+        "P0 sum + rank0.2，8x64 sampler",
+        teacher="t0_p0",
+    ),
+    Variant(
+        "t0_p0_sum_no_rank_std",
+        "p0_diag",
+        (
+            "teacher.readout=sum",
+            "teacher.train.rank_weight=0.0",
+            "teacher.train.group_by_drug=false",
+        ),
+        "P0 sum，无 rank，标准随机 sampler",
+        teacher="t0_p0",
+    ),
+    # P1：target-aware gene branch + 低秩 cls_proj
+    Variant("t0_p1", "p1", (), "T0 P1 完整（推荐）", teacher="t0_p1"),
+    Variant(
+        "t0_p1_norank",
+        "p1_diag",
+        ("teacher.rank_embedding=false",),
+        "P1 去掉 top-k rank embedding",
+        teacher="t0_p1",
+    ),
+    Variant(
+        "t0_p1_notarget",
+        "p1_diag",
+        ("teacher.target_branch=false",),
+        "P1 去掉 target gene branch",
+        teacher="t0_p1",
+    ),
+    Variant(
+        "t0_p1_shared",
+        "p1_diag",
+        (
+            "teacher.shared_pathway=true",
+            "teacher.cls_proj_mode=shared",
+        ),
+        "P1 共享 pathway + 共享满秩 cls（对照）",
+        teacher="t0_p1",
+    ),
+    Variant(
+        "t0_p1_clsnone",
+        "p1_diag",
+        ("teacher.use_cls_proj=false",),
+        "P1 完全去掉 cls_proj",
+        teacher="t0_p1",
+    ),
+    Variant(
+        "t0_p1_t16",
+        "p1_diag",
+        ("teacher.target_max_tokens=16",),
+        "P1 靶点 token 上限 16",
+        teacher="t0_p1",
+    ),
+    Variant(
+        "t0_p1_layers0",
+        "p1_diag",
+        ("teacher.target_gene_layers=0",),
+        "P1 target token 不做 self-attention",
+        teacher="t0_p1",
+    ),
     # E2：模态消融（去掉某模态时同时去掉其编码器参数）
     Variant(
         "t0_no_ge",
@@ -105,7 +305,18 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--suite",
         default="all",
-        choices=["all", "reference", "modality", "drug", "similarity"],
+        choices=[
+            "all",
+            "reference",
+            "rank",
+            "p0",
+            "p0_diag",
+            "p1",
+            "p1_diag",
+            "modality",
+            "drug",
+            "similarity",
+        ],
     )
     parser.add_argument("--only", default=None, help="逗号分隔的变体名（优先于 --suite）")
     parser.add_argument("--folds", default="0,2", help="逗号分隔折号，或 all")
@@ -152,7 +363,7 @@ def _command(
         PYTHON,
         "-m",
         "kite_drp.train.teacher_train",
-        "teacher=t0",
+        f"teacher={variant.teacher}",
         "split=lco",
         f"seed={seed}",
         f"fold={f'[{folds}]' if ',' in folds else folds}",
