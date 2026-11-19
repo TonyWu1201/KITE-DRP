@@ -23,7 +23,12 @@ class TeacherBatch:
     cls_mask: Tensor
     row_index: Tensor | None = None
     label_mask: Tensor | None = None
+    drug_idx: Tensor | None = None
+    ge_mask: Tensor | None = None
+    mu_mask: Tensor | None = None
     neighbor_ge: Tensor | None = None
+    neighbor_mask: Tensor | None = None
+    neighbor_confidence: Tensor | None = None
     graph_node_feat: Tensor | None = None
     graph_edge_index: Tensor | None = None
     graph_edge_feat: Tensor | None = None

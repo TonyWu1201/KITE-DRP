@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import json
 import math
 import time
@@ -17,6 +18,7 @@ from torch.utils.data import DataLoader
 
 from kite_drp.eval.metrics import evaluate_predictions
 from kite_drp.models.teacher.common import TeacherBatch, TeacherOutput
+from kite_drp.train.losses import pairwise_rank_loss
 
 
 def set_seed(seed: int) -> None:
@@ -43,7 +45,13 @@ def move_batch(batch: TeacherBatch, device: torch.device) -> TeacherBatch:
     return batch
 
 
-def _loss(model_output: TeacherOutput, batch: TeacherBatch, config: dict[str, Any]) -> torch.Tensor:
+def _loss(
+    model_output: TeacherOutput,
+    batch: TeacherBatch,
+    config: dict[str, Any],
+    *,
+    rank_weight: float = 0.0,
+) -> torch.Tensor:
     delta = float(config.get("huber_delta", 1.0))
     regression = F.huber_loss(model_output.y_hat, batch.y, delta=delta, reduction="none")
     if batch.label_mask is not None:
@@ -57,7 +65,20 @@ def _loss(model_output: TeacherOutput, batch: TeacherBatch, config: dict[str, An
     )
     classification = (bce * mask).sum() / mask.sum().clamp_min(1.0)
     weight = float(config.get("cls_weight", 0.5))
-    return regression + weight * classification
+    loss = regression + weight * classification
+    if rank_weight > 0 and batch.drug_idx is not None:
+        rank_mask = batch.label_mask if batch.label_mask is not None else None
+        ranking = pairwise_rank_loss(
+            model_output.y_hat.float(),
+            batch.y.float(),
+            batch.drug_idx,
+            mask=rank_mask,
+            temperature=float(config.get("rank_temperature", 1.0)),
+            min_delta=float(config.get("rank_min_delta", 0.1)),
+            max_pairs_per_group=int(config.get("rank_max_pairs", 1024)),
+        )
+        loss = loss + float(rank_weight) * ranking
+    return loss
 
 
 @torch.no_grad()
@@ -106,6 +127,18 @@ def _warmup_cosine(step: int, *, warmup: int, total: int) -> float:
     return 0.5 * (1.0 + math.cos(math.pi * min(progress, 1.0)))
 
 
+def _update_ema(ema_model: nn.Module, model: nn.Module, decay: float) -> None:
+    with torch.no_grad():
+        for ema_param, param in zip(
+            ema_model.parameters(), model.parameters(), strict=False
+        ):
+            ema_param.mul_(decay).add_(param.detach(), alpha=1.0 - decay)
+        for ema_buffer, buffer in zip(
+            ema_model.buffers(), model.buffers(), strict=False
+        ):
+            ema_buffer.copy_(buffer)
+
+
 def fit_teacher(
     model: nn.Module,
     *,
@@ -141,6 +174,13 @@ def fit_teacher(
         ),
     )
     scaler = torch.amp.GradScaler("cuda", enabled=amp_enabled)
+    ema_decay = float(config.get("ema_decay", 0.0))
+    ema_model = copy.deepcopy(model) if ema_decay > 0 else None
+    if ema_model is not None:
+        ema_model.eval()
+    base_rank_weight = float(config.get("rank_weight", 0.0))
+    rank_warmup_epochs = max(int(config.get("rank_warmup_epochs", 0)), 0)
+    min_epochs = max(int(config.get("min_epochs", 0)), 0)
 
     history: list[dict[str, Any]] = []
     best_value = -math.inf if monitor_mode == "max" else math.inf
@@ -152,13 +192,18 @@ def fit_teacher(
 
     for epoch in range(epochs):
         model.train()
+        if ema_model is not None:
+            ema_model.eval()
         epoch_loss = 0.0
+        rank_weight = base_rank_weight
+        if rank_warmup_epochs > 0:
+            rank_weight *= min(1.0, float(epoch + 1) / float(rank_warmup_epochs))
         for batch in train_loader:
             batch = move_batch(batch, device)
             optimizer.zero_grad(set_to_none=True)
             with torch.amp.autocast("cuda", enabled=amp_enabled):
                 output = model(batch)
-                loss = _loss(output, batch, config)
+                loss = _loss(output, batch, config, rank_weight=rank_weight)
             scaler.scale(loss).backward()
             if grad_clip > 0:
                 scaler.unscale_(optimizer)
@@ -166,14 +211,18 @@ def fit_teacher(
             scaler.step(optimizer)
             scaler.update()
             scheduler.step()
+            if ema_model is not None:
+                _update_ema(ema_model, model, ema_decay)
             epoch_loss += float(loss.detach().cpu())
             step += 1
 
-        val_metrics, _ = evaluate(model, val_loader, device=device, base=base)
+        eval_model = ema_model if ema_model is not None else model
+        val_metrics, _ = evaluate(eval_model, val_loader, device=device, base=base)
         record = {
             "epoch": epoch,
             "train_loss": epoch_loss / max(len(train_loader), 1),
             "lr": float(optimizer.param_groups[0]["lr"]),
+            "rank_weight": rank_weight,
             "val": val_metrics,
         }
         history.append(record)
@@ -185,6 +234,7 @@ def fit_teacher(
                 {
                     "epoch": epoch,
                     "train_loss": round(record["train_loss"], 5),
+                    "rank_weight": round(rank_weight, 4),
                     "val_r2": round(val_metrics["regression"]["r2"], 4),
                     "val_scc": round(val_metrics["regression"]["scc"], 4),
                     "val_auroc": round(val_metrics["classification"]["auroc"], 4),
@@ -202,11 +252,11 @@ def fit_teacher(
             stale = 0
             best_state = {
                 key: tensor.detach().cpu().clone()
-                for key, tensor in model.state_dict().items()
+                for key, tensor in eval_model.state_dict().items()
             }
         else:
             stale += 1
-            if stale >= patience:
+            if stale >= patience and (epoch + 1) >= min_epochs:
                 print(json.dumps({"early_stop": epoch, "best_epoch": best_epoch}))
                 break
 
@@ -222,6 +272,8 @@ def fit_teacher(
         "elapsed_sec": time.time() - started,
         "val": final_metrics,
         "history": history,
+        "ema_decay": ema_decay,
+        "rank_weight": base_rank_weight,
     }
     (run_dir / "history.json").write_text(
         json.dumps(history, ensure_ascii=False, indent=2, default=float), encoding="utf-8"

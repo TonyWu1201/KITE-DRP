@@ -1,0 +1,47 @@
+# @package teacher
+# T0 P0（完整实验开关）：hybrid readout + ranking + 4x128 grouped sampler。
+# Quick screen 显示该组合低于 v1；推荐落点见 configs/teacher/t0_p0_lite.yaml。
+# 结构与 t0.yaml 相同，所有改动由显式开关控制；旧 t0.yaml 保持 v1 口径。
+name: t0_p0
+variant: t0_p0
+kind: cross_attention
+drug_encoder: morgan_targets
+use_morgan: true
+use_targets: true
+use_gin: false
+target_embed_dim: 16
+d_model: 256
+n_heads: 4
+n_layers: 2
+dropout: 0.1
+top_k: 64
+use_neighbor: true
+neighbor_source: auto
+# 提高模态 dropout，增强缺失鲁棒性
+modality_dropout: 0.15
+# 独立 CLS/pathway/drug token 类型 + top-k rank embedding
+token_types: true
+rank_embedding: true
+# 用 attention pooling 替代 196-token mean
+cell_readout: attention
+# GE/MU/CNV 缺失时整段 mask，不再重复 missing vector
+masked_modalities: true
+# gated drug→cell cross-attention；仍保留 self-attention
+cross_gate: true
+# hybrid readout：[z_cell, z_drug, z_cell*z_drug] → d_model，并加显式双线性项
+readout: hybrid
+use_dense_shortcut: false
+modalities: [GE, MU, CNV]
+params_target: 5_000_000
+train:
+  lr: 1.5e-4
+  weight_decay: 1.0e-3
+  rank_weight: 0.5
+  rank_warmup_epochs: 2
+  cls_weight: 0.5
+  group_by_drug: true
+  drugs_per_batch: 4
+  cells_per_drug: 128
+  # 实测 EMA 在 72 步/epoch 下明显滞后；先关闭，保留开关
+  ema_decay: 0.0
+  min_epochs: 5

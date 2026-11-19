@@ -28,6 +28,8 @@ class CellFeatureSet:
     mu: np.ndarray  # (n, P) pathway mutation fraction
     cnv: np.ndarray  # (n, P) pathway CNV score (0 where unobserved)
     cnv_mask: np.ndarray  # (n,) bool
+    ge_mask: np.ndarray  # (n,) bool
+    mu_mask: np.ndarray  # (n,) bool
     index: dict[str, int]
 
 
@@ -120,6 +122,8 @@ def build_cell_features(
         mu=mu_scores.astype(np.float32),
         cnv=cnv_scores.astype(np.float32),
         cnv_mask=cnv_mask,
+        ge_mask=teacher["ge_observed_mask"].astype(bool),
+        mu_mask=teacher["mu_observed_mask"].astype(bool),
         index={cell: position for position, cell in enumerate(cell_ids)},
     )
 

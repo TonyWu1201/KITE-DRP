@@ -80,7 +80,7 @@ def export_cache(
     neighbor_source = resolve_neighbor_source(teacher_cfg, active_modalities)
     similarity_enabled = (
         bool(config.get("similarity", {}).get("enabled", True))
-        and teacher_cfg["name"] == "t0"
+        and teacher_cfg["name"] in {"t0", "t0_p0"}
         and bool(teacher_cfg.get("use_neighbor", True))
     )
     if similarity_enabled:

@@ -23,7 +23,7 @@ from kite_drp.models.teacher.b0 import BilinearTeacher
 from kite_drp.models.teacher.common import count_parameters
 from kite_drp.models.teacher.t0 import T0Teacher
 from kite_drp.train.data import build_pair_tensors, make_loader
-from kite_drp.train.engine import fit_teacher, resolve_device, set_seed
+from kite_drp.train.engine import evaluate, fit_teacher, resolve_device, set_seed
 from kite_drp.train.features import (
     build_cell_features,
     build_drug_features,
@@ -57,7 +57,7 @@ def _build_model(
     }
     if name == "b0":
         return BilinearTeacher(**common)
-    if name == "t0":
+    if name in {"t0", "t0_p0"}:
         return T0Teacher(
             **common,
             n_heads=int(teacher.get("n_heads", 4)),
@@ -68,6 +68,11 @@ def _build_model(
             modality_dropout=float(teacher.get("modality_dropout", 0.1)),
             readout=str(teacher.get("readout", "sum")),
             use_dense_shortcut=bool(teacher.get("use_dense_shortcut", False)),
+            token_types=bool(teacher.get("token_types", False)),
+            rank_embedding=bool(teacher.get("rank_embedding", False)),
+            cell_readout=str(teacher.get("cell_readout", "mean")),
+            masked_modalities=bool(teacher.get("masked_modalities", False)),
+            cross_gate=bool(teacher.get("cross_gate", False)),
         )
     raise KeyError(f"本轮只实现 b0/t0，收到 teacher={name}")
 
@@ -107,6 +112,8 @@ def _run_fold(
     processed = REPO_ROOT / paths["processed_dir"]
     splits = REPO_ROOT / paths["splits_dir"]
     seed = int(config.get("seed", 0))
+    fold_seed = seed * 100 + fold
+    set_seed(fold_seed)
 
     base = TeacherPairDataset(
         processed,
@@ -123,7 +130,7 @@ def _run_fold(
     neighbor_source = resolve_neighbor_source(config["teacher"], active_modalities)
     similarity_enabled = (
         bool(config.get("similarity", {}).get("enabled", True))
-        and str(config["teacher"].get("name", "t0")) == "t0"
+        and str(config["teacher"].get("name", "t0")) in {"t0", "t0_p0"}
         and bool(config["teacher"].get("use_neighbor", True))
     )
     if similarity_enabled:
@@ -152,6 +159,8 @@ def _run_fold(
     train_cfg.update(config["teacher"].get("train", {}))
     use_gin = bool(config["teacher"].get("use_gin", False))
     batch_size = int(train_cfg.get("batch_size", 512))
+    rank_weight = float(train_cfg.get("rank_weight", 0.0))
+    group_by_drug = bool(train_cfg.get("group_by_drug", False)) or rank_weight > 0.0
     train_loader = make_loader(
         base,
         tensors,
@@ -160,7 +169,10 @@ def _run_fold(
         batch_size=batch_size,
         shuffle=True,
         use_gin=use_gin,
-        seed=seed + fold,
+        seed=fold_seed,
+        group_by_drug=group_by_drug,
+        drugs_per_batch=int(train_cfg.get("drugs_per_batch", 8)),
+        cells_per_drug=int(train_cfg.get("cells_per_drug", 64)),
     )
     val_loader = make_loader(
         base,
@@ -171,6 +183,19 @@ def _run_fold(
         shuffle=False,
         use_gin=use_gin,
     )
+    test_loader = (
+        make_loader(
+            base,
+            tensors,
+            drugs,
+            split="test",
+            batch_size=batch_size,
+            shuffle=False,
+            use_gin=use_gin,
+        )
+        if bool(train_cfg.get("eval_test", False))
+        else None
+    )
 
     model = _build_model(
         config,
@@ -180,10 +205,11 @@ def _run_fold(
     )
     params = count_parameters(model)
     target = int(config["teacher"].get("params_target", 5_000_000))
+    variant = str(config["teacher"].get("variant", config["teacher"]["name"]))
     print(
         json.dumps(
             {
-                "variant": config["teacher"]["name"],
+                "variant": variant,
                 "fold": fold,
                 "split": split_id,
                 "params": params,
@@ -215,6 +241,14 @@ def _run_fold(
     result["similarity"] = similarity_meta
     result["train_pairs"] = int(base.indices("train").size)
     result["val_pairs"] = int(base.indices("val").size)
+    if test_loader is not None:
+        test_metrics, test_frame = evaluate(model, test_loader, device=device, base=base)
+        result["test"] = test_metrics
+        test_frame.to_parquet(fold_dir / "test_predictions.parquet", index=False)
+        (fold_dir / "test_metrics.json").write_text(
+            json.dumps(test_metrics, ensure_ascii=False, indent=2, default=float),
+            encoding="utf-8",
+        )
     model_spec = {
         "model_class": str(config["teacher"]["name"]),
         "pathway_dim": int(features.ge.shape[1]),
@@ -252,8 +286,9 @@ def main(config: DictConfig) -> None:
         print(json.dumps({"start_fold": fold, "split": split_id}), flush=True)
         results.append(_run_fold(resolved, fold=fold, split_id=split_id, run_dir=output_dir))
 
+    variant = str(resolved["teacher"].get("variant", resolved["teacher"]["name"]))
     summary = {
-        "variant": resolved["teacher"]["name"],
+        "variant": variant,
         "split": split_id,
         "seed": seed,
         "pool": resolved.get("pool", "M-716"),
@@ -265,8 +300,30 @@ def main(config: DictConfig) -> None:
         | {
             key: float(np.nanmean([result["val"]["classification"][key] for result in results]))
             for key in ("auroc", "auprc", "ece")
+        }
+        | {
+            "per_drug_scc": float(
+                np.nanmean(
+                    [
+                        result["val"].get("per_drug", {}).get("scc_mean", float("nan"))
+                        for result in results
+                    ]
+                )
+            )
         },
     }
+    if all("test" in result for result in results):
+        summary["mean_test"] = {
+            key: float(
+                np.nanmean([result["test"]["regression"][key] for result in results])
+            )
+            for key in ("r2", "pcc", "scc", "rmse")
+        } | {
+            key: float(
+                np.nanmean([result["test"]["classification"][key] for result in results])
+            )
+            for key in ("auroc", "auprc", "ece")
+        }
     (output_dir / "summary.json").write_text(
         json.dumps(summary, ensure_ascii=False, indent=2, default=float), encoding="utf-8"
     )

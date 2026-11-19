@@ -52,6 +52,23 @@
 因此论文中必须如实报告“多组学/注意力/相似性 token 的边际增益不显著”；
 教师侧的差异化留给 T1 图结构或蒸馏实验检验。
 
+### 4.1 P0 快速验证（2026-11-19）
+
+P0（排序损失 / token-readout / 缺失 mask / 逐折 seed）的代码已落在
+`feat/t0-p0-ranking-readout`；快速验证为 LCO fold 0/2 × 2 seeds × 5 epochs：
+
+| 变体 | R² | SCC | AUROC |
+|---|---:|---:|---:|
+| T0 v1 | 0.155 | **0.414** | **0.701** |
+| P0-lite（sum, no-rank, 8×64） | **0.166** | 0.410 | 0.698 |
+| P0-lite + rank 0.2 | 0.132 | 0.403 | 0.697 |
+
+- 完整 P0（hybrid + rank 0.5 + 4×128）在 seed0 仅 0.374 SCC，明显低于 v1；
+  **hybrid readout 是主要负贡献**，4×128 grouped sampler 也因药物多样性不足掉点。
+- P0-lite 与 v1 的 SCC 基本打平、R² 略好；**没有达到“排序损失提升 SCC”的目标**。
+- 详细组件消融与限制见
+  [`plans&notes/2026-11-19_T0-P0快速验证.md`](../../plans&notes/2026-11-19_T0-P0快速验证.md)。
+
 ## 5. 适用范围与限制
 
 - 当前仅 LCO、单 seed；LDO/scaffold 与 ≥3 seeds 待 E1/E7/E12。
