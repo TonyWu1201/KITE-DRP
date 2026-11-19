@@ -113,6 +113,9 @@ class T1Teacher(nn.Module):
         self.drug_res_proj = nn.Linear(graph_hidden, self.d_model)
         self.cell_gate = nn.Parameter(torch.zeros(1))
         self.drug_gate = nn.Parameter(torch.zeros(1))
+        # 预测级残差：y = y_P1 + tanh(δ)·(y_graph - y_P1)。embedding 级
+        # 残差容易被 gate 压到 0；graph-only 头若有互补信号，这一项可直接利用。
+        self.graph_pred_gate = nn.Parameter(torch.zeros(1))
         self.graph_pair_proj = nn.Sequential(
             nn.Linear(graph_hidden * 3, self.d_model),
             nn.GELU(),
@@ -205,7 +208,11 @@ class T1Teacher(nn.Module):
             z_cell = p1.z_cell + torch.tanh(self.cell_gate) * self.cell_res_proj(h_cell)
             z_drug = p1.z_drug + torch.tanh(self.drug_gate) * self.drug_res_proj(h_drug)
             z_pair = z_drug + z_cell
-            y_hat, logits = self.backbone.heads(z_pair)
+            y_base, logits_base = self.backbone.heads(z_pair)
+            y_graph, logits_graph = self.graph_heads(z_graph)
+            blend = torch.tanh(self.graph_pred_gate)
+            y_hat = y_base + blend * (y_graph - y_base)
+            logits = logits_base + blend * (logits_graph - logits_base)
             aux = dict(p1.aux)
             aux.update(
                 {
@@ -214,6 +221,7 @@ class T1Teacher(nn.Module):
                     "gene_gate": torch.tanh(self.gene_gate).detach(),
                     "cell_gate": torch.tanh(self.cell_gate).detach(),
                     "drug_gate": torch.tanh(self.drug_gate).detach(),
+                    "graph_pred_gate": torch.tanh(self.graph_pred_gate).detach(),
                 }
             )
         else:

@@ -137,6 +137,18 @@ def test_t1_init_equals_p1() -> None:
     assert float(torch.tanh(t1.drug_gate).detach()) == 0.0
 
 
+def test_t1_gates_receive_gradients() -> None:
+    model = _model(_backbone())
+    model.set_graph(_graph())
+    output = model(_batch())
+    loss = output.y_hat.sum() + output.aux["y_graph"].sum()
+    loss.backward()
+    for name in ("gene_gate", "cell_gate", "drug_gate", "graph_pred_gate"):
+        grad = getattr(model, name).grad
+        assert grad is not None
+        assert float(grad.abs()) > 0.0
+
+
 def test_t1_graph_only_forward() -> None:
     backbone = _backbone()
     model = T1Teacher(

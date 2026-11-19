@@ -139,6 +139,7 @@ def evaluate(
     metrics = evaluate_predictions(frame)
     if graph_predictions:
         graph_pred = np.concatenate(graph_predictions)
+        frame["y_graph_pred"] = graph_pred
         mask = frame["label_mask"].to_numpy(dtype=bool)
         metrics["graph_regression"] = regression_metrics(
             frame["y_true"].to_numpy()[mask],
@@ -241,7 +242,7 @@ def fit_teacher(
         val_metrics, _ = evaluate(eval_model, val_loader, device=device, base=base)
         gates = {
             name: float(torch.tanh(getattr(eval_model, name)).detach())
-            for name in ("gene_gate", "cell_gate", "drug_gate")
+            for name in ("gene_gate", "cell_gate", "drug_gate", "graph_pred_gate")
             if hasattr(eval_model, name)
         }
         record = {
