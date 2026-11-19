@@ -212,6 +212,13 @@ uv run uvicorn app.main:app --host 127.0.0.1 --port 8000
   uv run python -m kite_drp.train.teacher_train teacher=t0 teacher.use_neighbor=false
   # 批量消融（E2 模态 / E-drug / E-sim；默认折 0+2、10 epochs、2 workers）
   uv run python scripts/run_ablations.py --suite all --folds 0,2 --epochs 10
+  # T1 图教师：先用同 fold P1 checkpoint 初始化（T1 起点 = P1）
+  uv run python -m kite_drp.train.teacher_train teacher=t1 split=ldo fold=0 \
+    teacher.init_from=experiments/<p1_run>
+  # T1 快速筛选（P1 基线 + T1 + 随机 PPI/DTI；3 折 × 2 seeds）
+  uv run python scripts/run_t1_quick.py --variants p1,t1,t1_random_ppi,t1_random_dti \
+    --split ldo --folds 0,1,2 --seeds 0,1 --epochs 20 \
+    --init-from experiments/p1_ldo_quick --out experiments/p1_ldo_quick
   # 学生 A 档 + 输出软标签蒸馏（待实现）
   uv run python -m kite_drp.train.student_train --config-name config student=a kd=default
   ```
