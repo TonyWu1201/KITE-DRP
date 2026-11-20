@@ -12,6 +12,7 @@
 | [`teacher-t0.md`](teacher-t0.md) | T0 多模态交叉注意力教师（v1 / P1 变体） | ✅ v0.2（v1 LCO 5 折单 seed；P1 2 折 × 2 seeds 快速验证；正式 5 折待补） |
 | [`teacher-t0-ablations.md`](teacher-t0-ablations.md) | T0 的 E2/E-drug/E-sim 消融报告 | ✅ 筛选 + 5 折确认（单 seed） |
 | [`teacher-t1.md`](teacher-t1.md) | T1 图增强 P1 教师（主教师候选） | 🚧 v0.1（代码/图/单测完成；LDO 快速筛选进行中） |
+| [`teacher-t1-local.md`](teacher-t1-local.md) | T1-local：每药一跳局部图残差（新 DTI 下的图教师主线） | 🚧 v0.1（代码/单测完成；快速验证进行中） |
 | `student-a-int8.md` | A 档学生 + 动态 INT8（端侧交付） | 待蒸馏/QAT（M5） |
 | 待补 | B 档学生 / S-latent 极限档 | — |
 

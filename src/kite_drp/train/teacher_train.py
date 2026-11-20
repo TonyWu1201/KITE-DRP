@@ -23,6 +23,7 @@ from kite_drp.models.teacher.b0 import BilinearTeacher
 from kite_drp.models.teacher.common import count_parameters
 from kite_drp.models.teacher.t0 import T0Teacher
 from kite_drp.models.teacher.t1 import T1Teacher
+from kite_drp.models.teacher.t1_local import T1LocalTeacher, T1MlpHeadTeacher
 from kite_drp.train.data import build_pair_tensors, make_loader
 from kite_drp.train.engine import evaluate, fit_teacher, resolve_device, set_seed
 from kite_drp.train.features import (
@@ -32,6 +33,7 @@ from kite_drp.train.features import (
     resolve_neighbor_source,
     resolve_similarity_config,
 )
+from kite_drp.train.local_graph import build_local_graphs, local_graph_tensors
 from kite_drp.train.t1_graph import build_t1_graph, graph_tensors
 
 
@@ -61,7 +63,7 @@ def _build_model(
     }
     if name == "b0":
         return BilinearTeacher(**common)
-    if name in {"t0", "t0_p0", "t0_p1", "t1", "t1_graph_only"}:
+    if name in {"t0", "t0_p0", "t0_p1", "t1", "t1_graph_only", "t1_local", "t1_mlp"}:
         graph_model = name in {"t1", "t1_graph_only"}
         backbone = T0Teacher(
             **common,
@@ -89,6 +91,23 @@ def _build_model(
             use_target_table=not graph_model,
         )
         if not graph_model:
+            if name in {"t1_local", "t1_mlp"}:
+                local_cfg = teacher.get("local_graph", {}) or {}
+                if name == "t1_mlp":
+                    return T1MlpHeadTeacher(
+                        backbone,
+                        hidden=int(local_cfg.get("mlp_hidden", 128)),
+                        dropout=float(local_cfg.get("dropout", teacher.get("dropout", 0.1))),
+                    )
+                return T1LocalTeacher(
+                    backbone,
+                    hidden=int(local_cfg.get("hidden", 64)),
+                    readout_hidden=int(local_cfg.get("readout_hidden", 128)),
+                    condition_on=str(local_cfg.get("condition_on", "pair")),
+                    propagation=str(local_cfg.get("propagation", "trainable")),
+                    dropout=float(local_cfg.get("dropout", teacher.get("dropout", 0.1))),
+                    residual_shrink=float(local_cfg.get("residual_shrink", 1.0)),
+                )
             return backbone
         if n_graph_genes is None or cell_in_dim is None:
             raise ValueError("T1 需要 n_graph_genes / cell_in_dim")
@@ -105,7 +124,9 @@ def _build_model(
             dropout=float(graph_cfg.get("dropout", teacher.get("dropout", 0.1))),
             use_backbone=name != "t1_graph_only",
         )
-    raise KeyError(f"本轮只实现 b0/t0/t0_p0/t0_p1/t1/t1_graph_only，收到 teacher={name}")
+    raise KeyError(
+        f"本轮只实现 b0/t0/t0_p0/t0_p1/t1/t1_graph_only/t1_local/t1_mlp，收到 teacher={name}"
+    )
 
 
 def _split_id(config: dict[str, Any]) -> str:
@@ -162,7 +183,7 @@ def _run_fold(
     similarity_enabled = (
         bool(config.get("similarity", {}).get("enabled", True))
         and str(config["teacher"].get("name", "t0"))
-        in {"t0", "t0_p0", "t0_p1", "t1", "t1_graph_only"}
+        in {"t0", "t0_p0", "t0_p1", "t1", "t1_graph_only", "t1_local", "t1_mlp"}
         and bool(config["teacher"].get("use_neighbor", True))
     )
     target_max_tokens = (
@@ -202,6 +223,7 @@ def _run_fold(
     teacher_name = str(config["teacher"].get("name", "t0"))
     graph_bundle: dict[str, Any] | None = None
     graph_arrays: dict[str, Any] | None = None
+    local_bundle: Any | None = None
     if teacher_name in {"t1", "t1_graph_only"}:
         graph_bundle = build_t1_graph(
             processed,
@@ -211,6 +233,14 @@ def _run_fold(
             split_dir=splits,
         )
         graph_arrays = graph_bundle["arrays"]
+    if teacher_name in {"t1_local", "t1_mlp"}:
+        local_bundle = build_local_graphs(
+            processed,
+            features,
+            drugs,
+            config=config["teacher"].get("local_graph", {}),
+            cache_dir=REPO_ROOT / paths["interim_dir"] / "teacher" / "local_graph",
+        )
 
     train_cfg = dict(config["train"])
     train_cfg.update(config["teacher"].get("train", {}))
@@ -230,6 +260,7 @@ def _run_fold(
         batch_size=batch_size,
         shuffle=True,
         use_gin=use_gin,
+        local_graphs=(local_bundle.arrays if local_bundle is not None else None),
         seed=fold_seed,
         group_by_drug=group_by_drug,
         drugs_per_batch=int(train_cfg.get("drugs_per_batch", 8)),
@@ -243,6 +274,7 @@ def _run_fold(
         batch_size=batch_size,
         shuffle=False,
         use_gin=use_gin,
+        local_graphs=(local_bundle.arrays if local_bundle is not None else None),
     )
     test_loader = (
         make_loader(
@@ -253,6 +285,7 @@ def _run_fold(
             batch_size=batch_size,
             shuffle=False,
             use_gin=use_gin,
+            local_graphs=(local_bundle.arrays if local_bundle is not None else None),
         )
         if bool(train_cfg.get("eval_test", False))
         else None
@@ -293,20 +326,26 @@ def _run_fold(
     model = model.to(device)
     if graph_arrays is not None:
         model.set_graph(graph_tensors(graph_arrays))  # type: ignore[attr-defined]
+    if local_bundle is not None:
+        model.set_local_graph(  # type: ignore[attr-defined]
+            local_graph_tensors(local_bundle, device=device)
+        )
+    if teacher_name in {"t1", "t1_graph_only", "t1_local", "t1_mlp"}:
         init_from = config["teacher"].get("init_from")
-        if init_from:
-            init_path = Path(str(init_from))
-            if not init_path.is_absolute():
-                init_path = REPO_ROOT / init_path
-            if init_path.is_dir():
-                init_path = init_path / f"fold{fold}" / "best.pt"
-            checkpoint = torch.load(init_path, map_location=device, weights_only=False)
-            state = checkpoint.get("model", checkpoint)
-            model.load_p1_checkpoint(state)  # type: ignore[attr-defined]
-            print(
-                json.dumps({"init_from": str(init_path)}, ensure_ascii=False),
-                flush=True,
-            )
+        if not init_from:
+            raise ValueError(f"{teacher_name} 需要 teacher.init_from 指向同折 P1 checkpoint")
+        init_path = Path(str(init_from))
+        if not init_path.is_absolute():
+            init_path = REPO_ROOT / init_path
+        if init_path.is_dir():
+            init_path = init_path / f"fold{fold}" / "best.pt"
+        checkpoint = torch.load(init_path, map_location=device, weights_only=False)
+        state = checkpoint.get("model", checkpoint)
+        model.load_p1_checkpoint(state)  # type: ignore[attr-defined]
+        print(
+            json.dumps({"init_from": str(init_path)}, ensure_ascii=False),
+            flush=True,
+        )
     fold_dir = run_dir / f"fold{fold}"
     result = fit_teacher(
         model,
@@ -340,6 +379,11 @@ def _run_fold(
         "teacher": config["teacher"],
         "graph": config["teacher"].get("graph", {}) if graph_arrays is not None else None,
         "graph_spec": graph_bundle["spec"] if graph_bundle is not None else None,
+        "local_graph": (
+            config["teacher"].get("local_graph", {}) if local_bundle is not None else None
+        ),
+        "local_graph_spec": local_bundle.spec if local_bundle is not None else None,
+        "local_graph_hash": (local_bundle.spec.get("hash") if local_bundle is not None else None),
     }
     (fold_dir / "model_spec.json").write_text(
         json.dumps(model_spec, ensure_ascii=False, indent=2, default=str), encoding="utf-8"

@@ -1,0 +1,78 @@
+# @package teacher
+# T1-local：冻结 P1 + 每药一跳局部图残差（计划书 §5）。
+#
+# P1 backbone 参数与 t0_p1 保持一致；init_from 必须在命令行指向同 split/fold
+# 的 P1 checkpoint。局部图只训练残差头及其编码器，P1 始终 eval/no-grad。
+name: t1_local
+variant: t1_local
+kind: local_graph
+# ---- P1 backbone ----
+drug_encoder: morgan_targets
+use_morgan: true
+use_targets: true
+use_gin: false
+target_embed_dim: 16
+d_model: 256
+n_heads: 4
+n_layers: 2
+dropout: 0.1
+top_k: 64
+use_neighbor: true
+neighbor_source: auto
+modality_dropout: 0.15
+token_types: true
+rank_embedding: true
+cell_readout: attention
+masked_modalities: true
+cross_gate: true
+readout: sum
+use_dense_shortcut: false
+shared_pathway: false
+shared_pathway_proj: false
+use_cls_proj: true
+cls_proj_mode: lowrank
+cls_proj_rank: 64
+target_branch: true
+target_gene_layers: 1
+target_max_tokens: 64
+modalities: [GE, MU, CNV]
+params_target: 5_500_000
+# 同 split/fold 的 P1 run 目录（含 foldK/best.pt）或直接 .pt 路径。
+init_from: null
+
+# ---- 每药局部图 ----
+local_graph:
+  enabled: true
+  ppi_min_score: 0.7
+  max_neighbors_per_target: 8
+  max_nodes_per_drug: 64
+  # ppi | pseudo（保留根，匹配度数与可观测性抽伪邻居）
+  neighbor_mode: ppi
+  # none | degree（逐药保度双边交换）
+  rewire: none
+  # any（OT+GDSC）主门控；ot 仅用于分层报告
+  coverage: any
+  hidden: 64
+  readout_hidden: 128
+  # pair | cell | none：残差头读取哪一路冻结 P1 表征
+  condition_on: pair
+  # trainable | fixed | none
+  propagation: trainable
+  dropout: 0.1
+  residual_shrink: 1.0
+  seed: 20261120
+
+train:
+  lr: 1.0e-4
+  weight_decay: 1.0e-3
+  rank_weight: 0.0
+  # 局部图只改回归分数；分类沿用 P1，BCE 不再产生有效梯度。
+  cls_weight: 0.0
+  group_by_drug: false
+  ema_decay: 0.0
+  min_epochs: 0
+  # P1 全程冻结；保留字段与旧 T1 配置兼容。
+  freeze_p1_epochs: 0
+  p1_lr_mult: 1.0
+  graph_weight: 0.0
+  graph_cls_weight: 0.0
