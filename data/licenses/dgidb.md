@@ -1,9 +1,13 @@
-# 数据源许可：DGIdb
+# 数据源许可：DGIdb（已停用）
 
-- 核实状态：待核实（混合来源；再分发受限）
-- 核实日期：2026-11-17
+- 核实状态：**已停用**（混合来源；再分发条款不清）
+- 核实日期：2026-11-20
 - 官方条款链接：https://dgidb.org/、https://github.com/dgidb
 - 数据卡：`docs/data_cards/priors_string_hgnc_dgidb.md`
+
+> **2026-11-20 决策**：DTI 主源改为 Open Targets Platform 26.09（CC0 4.0）。
+> `build_dti` 不再读取 DGIdb；`data/raw/dgidb/` 仅保留作历史审计，不进入
+> canonical / processed，也不应再打包发布。
 
 ## 1. 基本信息
 

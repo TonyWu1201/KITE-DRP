@@ -25,6 +25,7 @@
 
 ## 4. 使用限制与本项目约定
 
-- 允许：DTI/机制补充、药名桥接、派生统计。
+- **默认不参与 DTI**（`priors.dti.include_chembl=false`）；Open Targets 已覆盖其 MoA 主路径。
+- 允许：显式开启后的 DTI/机制补充、药名桥接、派生统计。
 - 注意：若公开 release 包含 ChEMBL 派生边表，需标注 CC BY-SA 并评估 copyleft 影响。
 - KEGG/DrugBank 不在本许可内，仍禁止打包。

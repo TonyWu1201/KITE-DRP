@@ -15,7 +15,8 @@ data/
 ## 当前状态（2026-11-15）
 
 - `data/raw/`：已下载 GDSC2、DepMap（Model/表达/突变/CNV）、旧 CCLE、HGNC、STRING v12.5/v12.0、
-  DGIdb v5.0.13、TCGA-CESC 四模态（GDC Release 46.0，1,204 文件 6.421 GB）+ 临床/CDR/Ding2016/manifests。
+  Open Targets 26.09（DTI 主源）、TCGA-CESC 四模态（GDC Release 46.0，1,204 文件 6.421 GB）
+  + 临床/CDR/Ding2016/manifests；DGIdb v5.0.13 已停用，仅留档。
   总大小约 **8.3 GB**。完整清单与大小见 [`raw/README.md`](raw/README.md)、
   非 TCGA 文件校验和见 [`raw/CHECKSUMS.md5`](raw/CHECKSUMS.md5)。
 - `data/interim/`、`data/processed/`、`data/splits/`：尚未生成（G0 门禁前完成管线）。

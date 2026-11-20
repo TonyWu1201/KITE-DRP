@@ -28,3 +28,6 @@
 
 - 允许：DTI、靶点/机制注释、派生图与统计。
 - 公开 release：可保留派生 DTI 边表，建议署名。
+- **本项目主 DTI 源**：`build_dti` 只使用 Open Targets `drug_mechanism_of_action`
+  + GDSC `TARGET` 文本；DGIdb 已停用，ChEMBL 默认不参与。
+- processed 产物：`data/processed/dti.parquet`、`data/processed/dti_coverage.json`。

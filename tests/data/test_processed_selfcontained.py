@@ -62,7 +62,17 @@ def test_graph_inputs_are_valid() -> None:
     problems = validate_graph_inputs(arrays)
     assert not problems, problems
     assert arrays["ppi_edges"].shape[1] > 100_000
-    assert arrays["dti_edges"].shape[1] > 3_000
+    # DGIdb 已停用；DTI = GDSC TARGET + Open Targets MoA，边数量级约 640。
+    assert arrays["dti_edges"].shape[1] > 300
+
+
+def test_dti_artifact_has_open_targets_provenance() -> None:
+    dti = pd.read_parquet(_artifact("dti_processed"))
+    assert {"compound_uid", "hgnc_symbol", "source", "match_method", "ot_drug_id"} <= set(
+        dti.columns
+    )
+    assert dti["source"].str.contains("opentargets", regex=False).any()
+    assert not dti["source"].str.contains("dgidb", regex=False).any()
 
 
 def test_processed_manifest_uses_portable_paths() -> None:

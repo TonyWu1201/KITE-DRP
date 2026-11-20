@@ -85,6 +85,16 @@ def load_data_config(path: str | Path | None = None) -> dict[str, Any]:
     priors.setdefault("ppi", {"version": "v12.5", "cutoff": 700, "dedupe": "undirected"})
     priors["ppi"].setdefault("cutoff", 700)
     priors["ppi"].setdefault("version", "v12.5")
+    priors.setdefault(
+        "dti",
+        {
+            "sources": ["gdsc_target", "opentargets"],
+            "include_chembl": False,
+            "opentargets_release": "26.09",
+        },
+    )
+    priors["dti"].setdefault("sources", ["gdsc_target", "opentargets"])
+    priors["dti"].setdefault("include_chembl", False)
     priors.setdefault("pathways", {"sources": ["reactome", "go"], "min_genes": 10})
     priors["pathways"].setdefault("min_genes", 10)
     priors["pathways"].setdefault("max_genes", 500)

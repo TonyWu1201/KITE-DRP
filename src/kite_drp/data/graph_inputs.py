@@ -38,7 +38,10 @@ def build_graph_inputs(
     canonical = Path(canonical_dir)
     processed = Path(processed_dir)
     ppi = io.read_parquet(_require(canonical / "ppi.parquet"))
-    dti = io.read_parquet(_require(canonical / "dti.parquet"))
+    dti_path = processed / "dti.parquet"
+    if not dti_path.is_file():
+        dti_path = canonical / "dti.parquet"
+    dti = io.read_parquet(_require(dti_path))
     universes = io.read_json(canonical / "gene_universes.json")
 
     teach_ge = set(universes.get("teach_ge", []))

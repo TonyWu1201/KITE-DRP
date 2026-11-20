@@ -13,7 +13,7 @@
 | 模型类型 | 教师 T1（训练期图教师，不参与端侧部署） |
 | 参数量 | 6,097,099（backbone 4,595,526 + graph 1,501,573） |
 | 图节点 | 基因 ~2,770 + 药物 286 + 细胞系 716 |
-| 图边（LDO fold0） | PPI 49,402 有向（~24.7k 无向）、DTI 4,395、cell-gene 213,403 |
+| 图边（LDO fold0） | PPI 49,402 有向（~24.7k 无向）、DTI 4,395（旧 DGIdb 版）、cell-gene 213,403 |
 | 输出 | 回归 `-z(LN_IC50)` + 敏感概率 + graph-only 辅助头 |
 
 ## 2. 设计
@@ -93,6 +93,6 @@ LDO batch 均验证，max |Δy| ~1e-7）。图必须先“挣出”增益。
 ## 6. 适用范围与限制
 
 - 图节点包含全部 716 个细胞系（transductive），LDO/scaffold 只留出药物标签；
-- 49/286 个药物无靶点；T1 对它们退化为 Morgan + 图上下文，需按“有无 DTI”分组报告；
-- 当前 DTI 97.5% 含 DGIdb，公开 release 前需重建 clean DTI 或提供 PPI-only 版本；
+- 73/286 个药物无靶点（OT+GDSC clean DTI）；T1 对它们退化为 Morgan + 图上下文，需按“有无 DTI”分组报告；
+- 2026-11-20 已重建 clean DTI：GDSC `TARGET` + Open Targets MoA（CC0），DGIdb 不再参与；旧 T1 权重仍对应旧 DTI，复现/对比时需固定版本；
 - **科研原型，不用于临床诊断或治疗决策。**
