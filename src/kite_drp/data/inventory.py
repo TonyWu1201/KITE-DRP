@@ -17,7 +17,8 @@ KNOWN_CATEGORIES = {
     "depmap": ["Model.csv", "DepMap_Expression", "DepMap_SomaticMutations", "DepMap_CNGeneWGS"],
     "hgnc": ["Gene.csv"],
     "string": ["9606.protein.links", "9606.protein.aliases"],
-    "dgidb": ["interactions.tsv", "drugs.tsv", "genes.tsv", "categories.tsv"],
+    "opentargets": [],
+    "chembl": [],
     "ccle": ["CCLE_DNA_methylation", "Cell_lines_annotations"],
     "tcga": ["clinical", "TCGA-CDR", "ding2016", "CESC"],
 }

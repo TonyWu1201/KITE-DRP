@@ -39,6 +39,18 @@ class TeacherBatch:
     graph_edge_feat: Tensor | None = None
     graph_batch: Tensor | None = None
     graph_num_graphs: int = 0
+    # T1-local：每药一跳局部图的扁平 batch 表示。
+    local_node_values: Tensor | None = None  # (N, 6)：GE/MU/CNV 值 + observed flag
+    local_node_root: Tensor | None = None  # (N,) bool
+    local_node_pair: Tensor | None = None  # (N,) 所属 pair 索引
+    local_node_gene: Tensor | None = None  # (N,) 基因表索引
+    local_node_gene_target: Tensor | None = None  # (N,) 该基因是否是 P1 训练过的靶点行
+    local_edge_index: Tensor | None = None  # (2, E)：扁平节点索引
+    local_edge_weight: Tensor | None = None  # (E,) STRING 置信度
+    local_graph_ptr: Tensor | None = None  # (B+1,) 每个 pair 的节点起点
+    local_graph_coverage: Tensor | None = None  # (B,) 药是否有合规 DTI
+    local_graph_observed: Tensor | None = None  # (B,) 该细胞至少观测到一个根
+    local_graph_has_neighbor: Tensor | None = None  # (B,) 该药局部图是否有边
 
 
 @dataclass

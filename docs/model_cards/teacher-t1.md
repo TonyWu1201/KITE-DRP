@@ -13,7 +13,7 @@
 | 模型类型 | 教师 T1（训练期图教师，不参与端侧部署） |
 | 参数量 | 6,097,099（backbone 4,595,526 + graph 1,501,573） |
 | 图节点 | 基因 ~2,770 + 药物 286 + 细胞系 716 |
-| 图边（LDO fold0） | PPI 49,402 有向（~24.7k 无向）、DTI 4,395、cell-gene 213,403 |
+| 图边（LDO fold0） | PPI 49,402 有向（~24.7k 无向）、DTI 4,395（旧 DGIdb 版）、cell-gene 213,403 |
 | 输出 | 回归 `-z(LN_IC50)` + 敏感概率 + graph-only 辅助头 |
 
 ## 2. 设计
@@ -93,6 +93,38 @@ LDO batch 均验证，max |Δy| ~1e-7）。图必须先“挣出”增益。
 ## 6. 适用范围与限制
 
 - 图节点包含全部 716 个细胞系（transductive），LDO/scaffold 只留出药物标签；
-- 49/286 个药物无靶点；T1 对它们退化为 Morgan + 图上下文，需按“有无 DTI”分组报告；
-- 当前 DTI 97.5% 含 DGIdb，公开 release 前需重建 clean DTI 或提供 PPI-only 版本；
+- 73/286 个药物无靶点（OT+GDSC clean DTI）；T1 对它们退化为 Morgan + 图上下文，需按“有无 DTI”分组报告；
+- 2026-11-20 已重建 clean DTI：GDSC `TARGET` + Open Targets MoA（CC0），DGIdb 不再参与；旧 T1 权重仍对应旧 DTI，复现/对比时需固定版本；
 - **科研原型，不用于临床诊断或治疗决策。**
+
+## 7. 2026-11-20 新 DTI 对照（快速验证）
+
+DTI 从旧 4,395 边 / 237 个药物切换到 `dti.parquet` 的 640 边 / 213 个药物
+（301 个靶点基因）后，旧 T1 权重和旧 P1 基线都不再可比。当前在
+`feat/t1-local-graph` 分支上用少折、单 seed 重跑：
+
+- P1：LDO fold 0–1，seed 0，12 epochs，per-drug SCC **0.6245**；
+- T1 legacy：LDO fold 0，seed 0，新 DTI + 新 P1 初始化，per-drug SCC **0.6397**
+  （相对 P1 fold0 **+0.0169**；OT 子集 +0.0372、GDSC-only +0.0043、无 DTI +0.0037）；
+- T1-local：见 [`teacher-t1-local.md`](teacher-t1-local.md)。
+
+T1 legacy 只作为“旧全局图在新 DTI 下是否还比 P1 好”的对照，不用于图拓扑
+归因；旧 random-DTI 对照因 P1 target 分支仍读真实靶点，不能解释为新 DTI
+的拓扑证据。
+
+### 7.1 新 DTI 归因对照
+
+| 变体 | per-drug SCC | Δ vs P1 fold0 |
+|---|---:|---:|
+| T1 legacy | 0.6397 | +0.0169 |
+| T1 + random PPI（保度重连） | 0.6398 | +0.0169 |
+| T1 + random DTI（保度重连） | 0.6378 | +0.0150 |
+| 1.5M MLP 头（冻结 P1） | 0.6237 | +0.0009 |
+| T1 冻结 P1 | 0.6384 | +0.0156 |
+| T1 去 cell-gene 边 | 0.6388 | +0.0160 |
+
+随机 PPI/DTI 几乎完整复现 T1 legacy 的增益；1.5M MLP 头只有 +0.0009；
+冻结 P1 和去 cell-gene 边也仍保留 +0.0156/+0.0160。排除后，T1 的增益来自
+图分支对药物和细胞的**独立第二套编码 + 与 P1 的门控融合**（多视角集成/
+第二塔），不是 PPI/DTI 拓扑、cell-gene 边、P1 微调或单纯头容量。T1 legacy
+不能作为“图教师”晋升；若追求这部分增益，应做无图的第二塔集成。

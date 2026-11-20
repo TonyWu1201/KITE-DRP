@@ -118,7 +118,7 @@ KITE-DRP/
 
 ## 数据与 Git LFS
 
-- `data/raw/` 约 8.3 GB（GDSC2、DepMap/CCLE、STRING、DGIdb、HGNC、TCGA-CESC 等），**不提交 git**；
+- `data/raw/` 约 8.3 GB（GDSC2、DepMap/CCLE、STRING、Open Targets、HGNC、TCGA-CESC 等），**不提交 git**；DGIdb 已停用，仅留档；
   数据索引与校验和（`data/raw/README.md`、`CHECKSUMS.md5`）随仓库跟踪。
 - **Git LFS 跟踪**：`data/processed/**`、`data/splits/**`、`deploy/packages/**`，以及
   `*.pt/*.pth/*.ckpt/*.safetensors/*.onnx/*.npz/*.parquet` 等大文件扩展名。
@@ -147,7 +147,7 @@ uv sync --extra data --extra graph
 .venv/bin/python scripts/download_pathways.py
 .venv/bin/python scripts/download_mutation_panel.py
 
-# P1 外部验证库（GDSC1 / CTRPv2 / PRISM）与 DTI 补充（Open Targets / ChEMBL）
+# P1 外部验证库（GDSC1 / CTRPv2 / PRISM）与 DTI 主源 Open Targets（ChEMBL 可选）
 .venv/bin/python scripts/download_p1_external.py --only all
 .venv/bin/python -m kite_drp data external
 

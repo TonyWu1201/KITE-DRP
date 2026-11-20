@@ -38,3 +38,4 @@
 | [0003](0003-deploy-server-and-submodule.md) | 端侧部署服务器与子模块策略 | 已接受 | 2026-11-15 |
 | [0004](0004-data-pipeline-g0-decisions.md) | G0 数据管线实现口径与两处实测偏差 | 已接受 | 2026-11-17 |
 | [0005](0005-processed-self-contained-teacher-inputs.md) | processed 自包含（教师训练可脱离 raw/canonical） | 已接受 | 2026-11-18 |
+| [0006](0006-dti-source-open-targets.md) | DTI 主源切换为 Open Targets，停用 DGIdb | 已接受 | 2026-11-20 |

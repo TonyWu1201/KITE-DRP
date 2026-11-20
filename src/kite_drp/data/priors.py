@@ -13,6 +13,7 @@ import pandas as pd
 from kite_drp.data import io
 from kite_drp.data.genes import GeneMaster
 from kite_drp.data.ids import normalize_drug_name
+from kite_drp.data.opentargets import build_opentargets_edges
 
 
 def _ensp(value: str) -> str:
@@ -121,109 +122,6 @@ def _array_items(value: Any) -> list[Any]:
     return [value]
 
 
-def _load_opentargets_edges(
-    opentargets_dir: str | Path,
-    compounds: pd.DataFrame,
-    master: GeneMaster,
-    *,
-    allowed: set[str] | None,
-) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-    """Open Targets drug_molecule + MOA + target → GDSC DTI 边。"""
-    root = Path(opentargets_dir)
-    target_files = sorted((root / "target").glob("*.parquet"))
-    drug_files = sorted((root / "drug_molecule").glob("*.parquet"))
-    moa_files = sorted((root / "drug_mechanism_of_action").glob("*.parquet"))
-    if not (target_files and drug_files and moa_files):
-        return [], {"status": "missing"}
-    targets = pd.concat([pd.read_parquet(path) for path in target_files], ignore_index=True)
-    drugs = pd.concat([pd.read_parquet(path) for path in drug_files], ignore_index=True)
-    moa = pd.concat([pd.read_parquet(path) for path in moa_files], ignore_index=True)
-
-    ensembl_to_symbol: dict[str, str] = {}
-    chembl_target_to_symbol: dict[str, str] = {}
-    for row in targets.itertuples(index=False):
-        symbol = str(row.approvedSymbol).strip()
-        if not symbol:
-            continue
-        ensembl_to_symbol[str(row.id)] = symbol
-        for xref in _array_items(row.dbXrefs):
-            if isinstance(xref, dict) and str(xref.get("source", "")).lower() == "chembl":
-                chembl_target_to_symbol[str(xref.get("id"))] = symbol
-
-    inchikey_to_drug: dict[str, str] = {}
-    name_to_drug: dict[str, str] = {}
-    for row in drugs.itertuples(index=False):
-        drug_id = str(row.id)
-        inchikey = getattr(row, "inchiKey", None)
-        if isinstance(inchikey, str) and inchikey:
-            inchikey_to_drug.setdefault(inchikey, drug_id)
-        for value in [getattr(row, "name", None), *_array_items(getattr(row, "synonyms", None))]:
-            if isinstance(value, dict):
-                value = value.get("label")
-            key = normalize_drug_name(value)
-            if key:
-                name_to_drug.setdefault(key, drug_id)
-
-    compound_to_drug: dict[str, str] = {}
-    for row in compounds.itertuples(index=False):
-        drug_id = None
-        inchikey = getattr(row, "inchikey", None)
-        if isinstance(inchikey, str) and inchikey:
-            drug_id = inchikey_to_drug.get(inchikey)
-        if drug_id is None:
-            for name in [row.drug_name, *getattr(row, "gdsc_names", [])]:
-                drug_id = name_to_drug.get(normalize_drug_name(name))
-                if drug_id:
-                    break
-        if drug_id:
-            compound_to_drug[row.compound_uid] = drug_id
-    drug_to_compounds: dict[str, list[str]] = {}
-    for compound_uid, drug_id in compound_to_drug.items():
-        drug_to_compounds.setdefault(drug_id, []).append(compound_uid)
-
-    records: list[dict[str, Any]] = []
-    for row in moa.itertuples(index=False):
-        target_ids = [str(value) for value in _array_items(getattr(row, "targets", None))]
-        target_name = str(getattr(row, "targetName", "") or "")
-        symbols = []
-        for target_id in target_ids:
-            symbol = ensembl_to_symbol.get(target_id)
-            if symbol is None:
-                symbol, _ = master.resolve(target_id)
-            if symbol:
-                symbols.append(symbol)
-        if not symbols and target_name:
-            symbol, _ = master.resolve(target_name)
-            if symbol:
-                symbols.append(symbol)
-        if not symbols:
-            continue
-        for chembl_id in _array_items(getattr(row, "chemblIds", None)):
-            for compound_uid in drug_to_compounds.get(str(chembl_id), []):
-                for symbol in sorted(set(symbols)):
-                    if allowed is not None and symbol not in allowed:
-                        continue
-                    records.append(
-                        {
-                            "compound_uid": compound_uid,
-                            "hgnc_symbol": symbol,
-                            "source": "opentargets",
-                            "score": 1.0,
-                            "action_type": str(getattr(row, "actionType", "") or ""),
-                            "mechanism": str(getattr(row, "mechanismOfAction", "") or ""),
-                            "target_name": target_name,
-                        }
-                    )
-    return records, {
-        "status": "ok",
-        "n_targets": int(len(targets)),
-        "n_drugs": int(len(drugs)),
-        "n_moa": int(len(moa)),
-        "matched_compounds": len(compound_to_drug),
-        "edges": len(records),
-    }
-
-
 def _load_chembl_edges(
     chembl_dir: str | Path,
     compounds: pd.DataFrame,
@@ -308,6 +206,7 @@ def _load_chembl_edges(
                         "action_type": str(getattr(row, "action_type", "") or ""),
                         "mechanism": str(getattr(row, "mechanism_of_action", "") or ""),
                         "target_name": str(getattr(row, "target_chembl_id", "") or ""),
+                        "source_version": "ChEMBL",
                     }
                 )
     return records, {
@@ -318,24 +217,79 @@ def _load_chembl_edges(
     }
 
 
+DTI_COLUMNS = [
+    "compound_uid",
+    "hgnc_symbol",
+    "source",
+    "score",
+    "action_type",
+    "mechanism",
+    "target_name",
+    "target_id",
+    "ot_drug_id",
+    "match_method",
+    "target_type",
+    "source_version",
+]
+
+
+def _join_unique(values: Iterable[Any]) -> str:
+    cleaned = {
+        str(value)
+        for value in values
+        if str(value) and str(value).lower() not in {"nan", "none", "null"}
+    }
+    return ";".join(sorted(cleaned))
+
+
+def _group_dti(records: list[dict[str, Any]]) -> pd.DataFrame:
+    """按 (compound, gene) 合并多来源证据，保留逐边 provenance。"""
+    dti = pd.DataFrame(records, columns=DTI_COLUMNS)
+    if dti.empty:
+        return dti
+    missing = [column for column in DTI_COLUMNS if column not in dti.columns]
+    for column in missing:
+        dti[column] = ""
+    grouped = dti.groupby(["compound_uid", "hgnc_symbol"], sort=False)
+    merged = pd.DataFrame(
+        {
+            "source": grouped["source"].agg(
+                lambda values: "+".join(sorted({str(value) for value in values if str(value)}))
+            ),
+            "score": grouped["score"].max(),
+            "action_type": grouped["action_type"].agg(_join_unique),
+            "mechanism": grouped["mechanism"].agg(_join_unique),
+            "target_name": grouped["target_name"].agg(_join_unique),
+            "target_id": grouped["target_id"].agg(_join_unique),
+            "ot_drug_id": grouped["ot_drug_id"].agg(_join_unique),
+            "match_method": grouped["match_method"].agg(_join_unique),
+            "target_type": grouped["target_type"].agg(_join_unique),
+            "source_version": grouped["source_version"].agg(_join_unique),
+        }
+    ).reset_index()
+    return merged.sort_values(["compound_uid", "hgnc_symbol"]).reset_index(drop=True)
+
+
 def build_dti(
     compounds: pd.DataFrame,
-    dgidb_path: str | Path,
     master: GeneMaster,
     *,
     allowed_genes: Iterable[str] | None = None,
     opentargets_dir: str | Path | None = None,
     chembl_dir: str | Path | None = None,
 ) -> tuple[pd.DataFrame, dict[str, Any]]:
-    """合并 GDSC 靶点、Open Targets、ChEMBL 与 DGIdb，输出 drug-target 边。
+    """合并 GDSC 靶点注释与 Open Targets MoA，输出 drug-target 边。
 
-    Open Targets 为主源（CC0），ChEMBL 补充机制，DGIdb 仅兜底/解释。
+    默认主源为 GDSC ``TARGET`` 文本与 Open Targets（CC0 4.0）。DGIdb 不再
+    参与；ChEMBL 仅在显式传入 ``chembl_dir`` 时作为可选补充（CC BY-SA）。
     """
     allowed = set(allowed_genes) if allowed_genes is not None else None
     records: list[dict[str, Any]] = []
+    gdsc_compounds: set[str] = set()
     for row in compounds.itertuples(index=False):
         for gene in row.target_genes:
             if allowed is None or gene in allowed:
+                gdsc_compounds.add(str(row.compound_uid))
                 records.append(
                     {
                         "compound_uid": row.compound_uid,
@@ -345,18 +299,21 @@ def build_dti(
                         "action_type": "",
                         "mechanism": "",
                         "target_name": gene,
+                        "target_id": "",
+                        "ot_drug_id": "",
+                        "match_method": "gdsc_target_text",
+                        "target_type": "",
+                        "source_version": "GDSC_8.5",
                     }
                 )
 
-    ot_records: list[dict[str, Any]] = []
     ot_info: dict[str, Any] = {"status": "not_configured"}
     if opentargets_dir:
-        ot_records, ot_info = _load_opentargets_edges(
-            opentargets_dir, compounds, master, allowed=allowed
+        ot_edges, ot_info = build_opentargets_edges(
+            compounds, master, opentargets_dir, allowed_genes=allowed
         )
-        records.extend(ot_records)
+        records.extend(ot_edges.to_dict("records"))
 
-    chembl_records: list[dict[str, Any]] = []
     chembl_info: dict[str, Any] = {"status": "not_configured"}
     if chembl_dir:
         chembl_records, chembl_info = _load_chembl_edges(
@@ -368,89 +325,9 @@ def build_dti(
         )
         records.extend(chembl_records)
 
-    name_to_uid: dict[str, str] = {}
-    for row in compounds.itertuples(index=False):
-        for name in [row.drug_name, *getattr(row, "gdsc_names", [])]:
-            key = normalize_drug_name(name)
-            if key:
-                name_to_uid.setdefault(key, row.compound_uid)
-
-    interactions = pd.read_csv(dgidb_path, sep="\t", comment="#", low_memory=False)
-    drug_columns = [
-        column for column in ("drug_name", "drug_claim_name") if column in interactions.columns
-    ]
-    gene_column = "gene_name" if "gene_name" in interactions.columns else "gene_claim_name"
-    matched_drugs: set[str] = set()
-    for row in interactions.itertuples(index=False):
-        uid = None
-        for column in drug_columns:
-            uid = name_to_uid.get(normalize_drug_name(getattr(row, column)))
-            if uid:
-                break
-        if not uid:
-            continue
-        symbol, _ = master.resolve(getattr(row, gene_column))
-        if not symbol or (allowed is not None and symbol not in allowed):
-            continue
-        matched_drugs.add(uid)
-        raw_score = getattr(row, "interaction_score", None)
-        try:
-            score = float(raw_score) if raw_score is not None and not pd.isna(raw_score) else 0.0
-        except (TypeError, ValueError):
-            score = 0.0
-        records.append(
-            {
-                "compound_uid": uid,
-                "hgnc_symbol": symbol,
-                "source": "dgidb",
-                "score": score,
-                "action_type": "",
-                "mechanism": "",
-                "target_name": symbol,
-            }
-        )
-
-    dti = pd.DataFrame(
-        records,
-        columns=[
-            "compound_uid",
-            "hgnc_symbol",
-            "source",
-            "score",
-            "action_type",
-            "mechanism",
-            "target_name",
-        ],
-    )
-    if not dti.empty:
-        grouped = dti.groupby(["compound_uid", "hgnc_symbol"])
-        sources = grouped["source"].agg(lambda values: "+".join(sorted(set(values))))
-        scores = grouped["score"].max()
-        actions = grouped["action_type"].agg(
-            lambda values: next((value for value in values if value), "")
-        )
-        mechanisms = grouped["mechanism"].agg(
-            lambda values: next((value for value in values if value), "")
-        )
-        target_names = grouped["target_name"].agg(
-            lambda values: next((value for value in values if value), "")
-        )
-        dti = (
-            pd.concat(
-                [
-                    sources.rename("source"),
-                    scores.rename("score"),
-                    actions.rename("action_type"),
-                    mechanisms.rename("mechanism"),
-                    target_names.rename("target_name"),
-                ],
-                axis=1,
-            )
-            .reset_index()
-            .sort_values(["compound_uid", "hgnc_symbol"])
-        )
+    dti = _group_dti(records)
     by_source: dict[str, int] = {}
-    for source in ("gdsc_target", "opentargets", "chembl", "dgidb"):
+    for source in ("gdsc_target", "opentargets", "chembl"):
         by_source[source] = (
             int(dti["source"].str.contains(source, regex=False).sum()) if not dti.empty else 0
         )
@@ -458,11 +335,9 @@ def build_dti(
         "edges": int(len(dti)),
         "compounds_covered": int(dti["compound_uid"].nunique()) if not dti.empty else 0,
         "genes_covered": int(dti["hgnc_symbol"].nunique()) if not dti.empty else 0,
-        "gdsc_target_compounds": (
-            int(compounds["has_target"].sum()) if "has_target" in compounds else 0
-        ),
-        "dgidb_matched_compounds": len(matched_drugs),
+        "gdsc_target_compounds": len(gdsc_compounds),
         "by_source_edges": by_source,
+        "sources": [source for source, count in by_source.items() if count],
         "opentargets": ot_info,
         "chembl": chembl_info,
     }

@@ -64,23 +64,30 @@ def _loss(
     classification = (bce * mask).sum() / mask.sum().clamp_min(1.0)
     weight = float(config.get("cls_weight", 0.5))
     loss = regression + weight * classification
+    local_gate = model_output.aux.get("local_gate")
+    graph_valid = (
+        local_gate.float() > 0
+        if local_gate is not None
+        else torch.ones_like(batch.y, dtype=torch.bool)
+    )
     graph_weight = float(config.get("graph_weight", 0.0))
     if graph_weight > 0 and "y_graph" in model_output.aux:
         graph_reg = F.huber_loss(
             model_output.aux["y_graph"], batch.y, delta=delta, reduction="none"
         )
+        mask_reg = graph_valid
         if batch.label_mask is not None:
-            mask_reg = batch.label_mask.to(graph_reg.dtype)
-            graph_reg = (graph_reg * mask_reg).sum() / mask_reg.sum().clamp_min(1.0)
-        else:
-            graph_reg = graph_reg.mean()
+            mask_reg = mask_reg & batch.label_mask.to(torch.bool)
+        mask_reg = mask_reg.to(graph_reg.dtype)
+        graph_reg = (graph_reg * mask_reg).sum() / mask_reg.sum().clamp_min(1.0)
         loss = loss + graph_weight * graph_reg
         graph_cls_weight = float(config.get("graph_cls_weight", 0.0))
         if graph_cls_weight > 0 and "logits_graph" in model_output.aux:
             graph_bce = F.binary_cross_entropy_with_logits(
                 model_output.aux["logits_graph"], batch.y_cls, reduction="none"
             )
-            graph_bce = (graph_bce * mask).sum() / mask.sum().clamp_min(1.0)
+            graph_mask = mask_reg * mask.to(graph_bce.dtype)
+            graph_bce = (graph_bce * graph_mask).sum() / graph_mask.sum().clamp_min(1.0)
             loss = loss + graph_cls_weight * graph_bce
     if rank_weight > 0 and batch.drug_idx is not None:
         rank_mask = batch.label_mask if batch.label_mask is not None else None
@@ -94,6 +101,36 @@ def _loss(
             max_pairs_per_group=int(config.get("rank_max_pairs", 1024)),
         )
         loss = loss + float(rank_weight) * ranking
+    graph_rank_weight = float(config.get("graph_rank_weight", 0.0))
+    if graph_rank_weight > 0 and batch.drug_idx is not None and "y_graph" in model_output.aux:
+        rank_mask = graph_valid
+        if batch.label_mask is not None:
+            rank_mask = rank_mask & batch.label_mask.to(torch.bool)
+        graph_ranking = pairwise_rank_loss(
+            model_output.aux["y_graph"].float(),
+            batch.y.float(),
+            batch.drug_idx,
+            mask=rank_mask,
+            temperature=float(config.get("graph_rank_temperature", 1.0)),
+            min_delta=float(config.get("graph_rank_min_delta", 0.1)),
+            max_pairs_per_group=int(config.get("graph_rank_max_pairs", 1024)),
+        )
+        loss = loss + graph_rank_weight * graph_ranking
+    center_weight = float(config.get("center_weight", 0.0))
+    if center_weight > 0 and batch.drug_idx is not None and "local_delta" in model_output.aux:
+        delta = model_output.aux["local_delta"].float()
+        center_mask = graph_valid.to(delta.dtype)
+        if batch.label_mask is not None:
+            center_mask = center_mask * batch.label_mask.to(delta.dtype)
+        n_drugs = int(batch.drug_idx.max().item()) + 1
+        sums = torch.zeros(n_drugs, dtype=delta.dtype, device=delta.device)
+        sums = sums.index_add_(0, batch.drug_idx, delta * center_mask)
+        counts = torch.zeros(n_drugs, dtype=delta.dtype, device=delta.device)
+        counts = counts.index_add_(0, batch.drug_idx, center_mask)
+        means = sums / counts.clamp_min(1.0)
+        valid_groups = counts > 0
+        if bool(valid_groups.any()):
+            loss = loss + center_weight * (means[valid_groups] ** 2).mean()
     return loss
 
 
@@ -276,6 +313,9 @@ def fit_teacher(
             for name in ("gene_gate", "cell_gate", "drug_gate", "graph_pred_gate")
             if hasattr(eval_model, name)
         }
+        graph_alpha = getattr(eval_model, "graph_alpha", None)
+        if graph_alpha is not None:
+            gates["graph_alpha"] = float(torch.tanh(graph_alpha).detach())
         record = {
             "epoch": epoch,
             "train_loss": epoch_loss / max(len(train_loader), 1),

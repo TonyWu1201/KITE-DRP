@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
+from typing import Any
 
 import numpy as np
 import torch
@@ -249,6 +250,93 @@ def _graph_batch(drug_indices: np.ndarray, drugs: DrugFeatureSet) -> dict[str, t
     }
 
 
+def _local_graph_batch(
+    local_arrays: dict[str, np.ndarray],
+    *,
+    tensors: PairTensors,
+    cell_idx: np.ndarray,
+    drug_idx: np.ndarray,
+) -> dict[str, torch.Tensor]:
+    """把每药局部图展开成 batch 内的扁平节点/边表示。
+
+    同一药物在 batch 中出现多次时，节点特征分别读取各自的细胞组学；
+    拓扑只读一次。这样同一邻接、不同细胞会产生不同消息。
+    """
+
+    node_ptr = np.asarray(local_arrays["node_ptr"], dtype=np.int64)
+    node_gene_all = np.asarray(local_arrays["node_gene"], dtype=np.int64)
+    node_root_all = np.asarray(local_arrays["node_root"], dtype=bool)
+    edge_ptr = np.asarray(local_arrays["edge_ptr"], dtype=np.int64)
+    edge_index_all = np.asarray(local_arrays["edge_index"], dtype=np.int64)
+    edge_weight_all = np.asarray(local_arrays["edge_weight"], dtype=np.float32)
+    gene_is_target = np.asarray(local_arrays["gene_is_target"], dtype=bool)
+    n_pairs = int(len(drug_idx))
+
+    n_nodes = node_ptr[drug_idx + 1] - node_ptr[drug_idx]
+    pair_node_ptr = np.concatenate([[0], np.cumsum(n_nodes)]).astype(np.int64)
+    total_nodes = int(pair_node_ptr[-1])
+    node_pair = np.repeat(np.arange(n_pairs, dtype=np.int64), n_nodes)
+    if total_nodes:
+        node_offset = pair_node_ptr[node_pair]
+        node_local = np.arange(total_nodes, dtype=np.int64) - node_offset
+        drug_node_start = node_ptr[drug_idx[node_pair]]
+        node_gene = node_gene_all[drug_node_start + node_local]
+        node_root = node_root_all[drug_node_start + node_local]
+        node_cell = cell_idx[node_pair]
+        values = np.zeros((total_nodes, 6), dtype=np.float32)
+        values[:, 0] = tensors.gene_ge[node_cell, node_gene]  # type: ignore[index]
+        values[:, 1] = (
+            tensors.cell_ge_mask[node_cell] & tensors.gene_ge_valid[node_gene]  # type: ignore[index]
+        ).astype(np.float32)
+        values[:, 2] = tensors.gene_mu[node_cell, node_gene]  # type: ignore[index]
+        values[:, 3] = (
+            tensors.cell_mu_mask[node_cell] & tensors.gene_mu_available[node_gene]  # type: ignore[index]
+        ).astype(np.float32)
+        values[:, 4] = tensors.gene_cnv[node_cell, node_gene]  # type: ignore[index]
+        values[:, 5] = (
+            tensors.cell_cnv_mask[node_cell] & tensors.gene_cnv_valid[node_gene]  # type: ignore[index]
+        ).astype(np.float32)
+        observed = values[:, [1, 3, 5]].max(axis=1) > 0
+        observed_root = np.zeros(n_pairs, dtype=bool)
+        np.logical_or.at(observed_root, node_pair, node_root & observed)
+    else:
+        node_gene = np.zeros(0, dtype=np.int64)
+        node_root = np.zeros(0, dtype=bool)
+        values = np.zeros((0, 6), dtype=np.float32)
+        observed_root = np.zeros(n_pairs, dtype=bool)
+
+    n_edges = edge_ptr[drug_idx + 1] - edge_ptr[drug_idx]
+    pair_edge_ptr = np.concatenate([[0], np.cumsum(n_edges)]).astype(np.int64)
+    total_edges = int(pair_edge_ptr[-1])
+    if total_edges:
+        edge_pair = np.repeat(np.arange(n_pairs, dtype=np.int64), n_edges)
+        edge_offset = pair_edge_ptr[edge_pair]
+        edge_local = np.arange(total_edges, dtype=np.int64) - edge_offset
+        drug_edge_start = edge_ptr[drug_idx[edge_pair]]
+        edge_nodes = edge_index_all[:, drug_edge_start + edge_local]
+        edge_index = edge_nodes + pair_node_ptr[edge_pair][None, :]
+        edge_weight = edge_weight_all[drug_edge_start + edge_local]
+    else:
+        edge_index = np.zeros((2, 0), dtype=np.int64)
+        edge_weight = np.zeros(0, dtype=np.float32)
+
+    coverage = np.asarray(local_arrays["coverage"], dtype=bool)[drug_idx]
+    has_neighbor = np.asarray(local_arrays["n_neighbors"], dtype=np.int64)[drug_idx] > 0
+    return {
+        "local_node_values": torch.from_numpy(values),
+        "local_node_root": torch.from_numpy(node_root),
+        "local_node_pair": torch.from_numpy(node_pair),
+        "local_node_gene": torch.from_numpy(node_gene),
+        "local_node_gene_target": torch.from_numpy(gene_is_target[node_gene]),
+        "local_edge_index": torch.from_numpy(edge_index.astype(np.int64, copy=False)),
+        "local_edge_weight": torch.from_numpy(edge_weight.astype(np.float32, copy=False)),
+        "local_graph_ptr": torch.from_numpy(pair_node_ptr),
+        "local_graph_coverage": torch.from_numpy(coverage),
+        "local_graph_observed": torch.from_numpy(observed_root),
+        "local_graph_has_neighbor": torch.from_numpy(has_neighbor),
+    }
+
+
 def collate_pairs(
     indices: list[int],
     *,
@@ -256,6 +344,7 @@ def collate_pairs(
     tensors: PairTensors,
     drugs: DrugFeatureSet,
     use_gin: bool = False,
+    local_graphs: Any | None = None,
 ) -> TeacherBatch:
     rows = np.asarray(indices, dtype=np.int64)
     cell_idx = base.cell_idx[rows]
@@ -335,6 +424,15 @@ def collate_pairs(
         batch.target_gene_ids = torch.from_numpy(target_ids)
         batch.target_gene_values = torch.from_numpy(values)
         batch.target_gene_mask = torch.from_numpy(target_mask)
+    if local_graphs is not None:
+        arrays = local_graphs.arrays if hasattr(local_graphs, "arrays") else local_graphs
+        for key, value in _local_graph_batch(
+            arrays,
+            tensors=tensors,
+            cell_idx=cell_idx,
+            drug_idx=drug_idx,
+        ).items():
+            setattr(batch, key, value)
     if use_gin:
         graph = _graph_batch(drug_idx, drugs)
         batch.graph_node_feat = graph.get("node_feat")  # type: ignore[assignment]
@@ -355,6 +453,7 @@ def make_loader(
     shuffle: bool,
     num_workers: int = 0,
     use_gin: bool = False,
+    local_graphs: Any | None = None,
     seed: int = 0,
     group_by_drug: bool = False,
     drugs_per_batch: int = 8,
@@ -363,7 +462,14 @@ def make_loader(
     dataset = PairDataset(base, split)
 
     def _collate(indices: list[int]) -> TeacherBatch:
-        return collate_pairs(indices, base=base, tensors=tensors, drugs=drugs, use_gin=use_gin)
+        return collate_pairs(
+            indices,
+            base=base,
+            tensors=tensors,
+            drugs=drugs,
+            use_gin=use_gin,
+            local_graphs=local_graphs,
+        )
 
     if group_by_drug:
         sampler = DrugGroupedBatchSampler(

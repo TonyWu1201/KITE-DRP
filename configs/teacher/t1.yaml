@@ -69,3 +69,5 @@ train:
   min_epochs: 5
   # v3 稳定化（P1 冻结 + 低 lr）见 configs/teacher/t1_v3.yaml；
   # 默认保持 v2 口径，保证已有 quick-screen 结果可复现。
+  freeze_p1_epochs: 0
+  p1_lr_mult: 1.0

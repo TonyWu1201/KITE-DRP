@@ -18,7 +18,7 @@
 | Open Targets 26.09 | `data/raw/opentargets/` | CC0 4.0 | ✅ 已知 |
 | ChEMBL 37 | `data/raw/chembl/` | CC BY-SA 3.0（copyleft） | ✅ 已知 |
 | GDSC1 / CTRPv2 / PRISM | `data/raw/{gdsc,ctrp,prism}/` | 学术引用；再分发待核 | ⚠️ 待核实原文 |
-| DGIdb v5.0.13 | `data/raw/dgidb/` | 混合来源、再分发受限；内部研究用，不打包发布 | ⚠️ 待核实逐源条款 |
+| DGIdb v5.0.13 | `data/raw/dgidb/` | **已停用**：混合来源、再分发条款不清；DTI 改用 Open Targets CC0 | ⛔ 不再进入管线 |
 | HGNC | `data/raw/hgnc/` | 引用 HGNC；再分发条款以官方为准 | ⚠️ 待核实原文 |
 | TCGA（GDC 开放层） | `data/raw/tcga/` | NIH 开放获取，需引用；受控层不得下载/分发 | ✅ 开放层可用 |
 | TCGA-CDR | `data/raw/tcga/cdr/` | PanCan-Clinical-2018，引用 Liu et al. 2018 | ✅ 已知 |

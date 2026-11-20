@@ -54,9 +54,15 @@ drug_features:
   smiles_source: pubchem_then_chembl
   morgan: {radius: 2, bits: 2048}
   graph: {atom_features: ogb_77}
-  targets: {sources: [gdsc_target, opentargets, chembl, dgidb]}
+  # DTI 主源：GDSC TARGET 文本 + Open Targets MoA（CC0）。DGIdb 已停用。
+  targets: {sources: [gdsc_target, opentargets]}
 
 priors:
+  dti:
+    sources: [gdsc_target, opentargets]
+    # ChEMBL 为 CC BY-SA，默认不参与；需要时显式置 true 并复核再分发条款。
+    include_chembl: false
+    opentargets_release: "26.09"
   ppi:
     version: v12.5
     cutoff: 700
@@ -87,8 +93,8 @@ raw_files:
   hgnc: data/raw/hgnc/Gene.csv
   string_links: data/raw/string/9606.protein.links.v12.5.txt.gz
   string_aliases: data/raw/string/9606.protein.aliases.v12.5.txt.gz
-  dgidb_interactions: data/raw/dgidb/interactions.tsv
   opentargets_dir: data/raw/opentargets/26.09
+  # 仅在 priors.dti.include_chembl=true 时读取
   chembl_dir: data/raw/chembl/37
   ccle_methylation: data/raw/ccle/CCLE_DNA_methylation_TSS1kb.txt
   tcga_file_index: data/interim/tcga/file_index.parquet

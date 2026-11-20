@@ -104,6 +104,67 @@ def _pathway_sources(config: dict[str, Any]) -> list[Path]:
     return sorted(set(files))
 
 
+def _join_dti_values(values: Iterable[Any]) -> str:
+    cleaned = {
+        str(value)
+        for value in values
+        if str(value) and str(value).lower() not in {"nan", "none", "null"}
+    }
+    return ";".join(sorted(cleaned))
+
+
+def _as_gene_list(value: Any) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, str):
+        return [value] if value else []
+    try:
+        return [str(item) for item in value if str(item) and str(item) != "nan"]
+    except TypeError:
+        return []
+
+
+def _apply_dti_to_compounds(compounds: pd.DataFrame, dti: pd.DataFrame) -> pd.DataFrame:
+    """把 DTI 靶点并回 compounds；以 GDSC 原始靶点列为基线，避免重复膨胀。"""
+    compounds = compounds.copy()
+    base_column = "gdsc_target_genes" if "gdsc_target_genes" in compounds else "target_genes"
+    compounds["gdsc_target_genes"] = compounds[base_column].map(_as_gene_list)
+    base_genes = dict(zip(compounds["compound_uid"], compounds["gdsc_target_genes"], strict=False))
+    dti_genes: dict[str, set[str]] = {}
+    for row in dti.itertuples(index=False):
+        dti_genes.setdefault(str(row.compound_uid), set()).add(str(row.hgnc_symbol))
+    compounds["target_genes"] = compounds["compound_uid"].map(
+        lambda uid: sorted(set(base_genes.get(uid, [])) | dti_genes.get(uid, set()))
+    )
+    compounds["has_gdsc_target"] = compounds["gdsc_target_genes"].map(len) > 0
+    compounds["has_target"] = compounds["target_genes"].map(len) > 0
+    compounds["has_dti"] = compounds["compound_uid"].isin(dti_genes)
+    if dti.empty:
+        compounds["dti_sources"] = ""
+        compounds["ot_drug_ids"] = ""
+        return compounds
+    dti_sources: dict[str, str] = {}
+    for uid, group in dti.groupby("compound_uid"):
+        parts = {
+            part
+            for value in group["source"]
+            for part in str(value).replace(";", "+").split("+")
+            if part
+        }
+        dti_sources[str(uid)] = "+".join(sorted(parts))
+    compounds["dti_sources"] = compounds["compound_uid"].map(dti_sources).fillna("")
+    compounds["ot_drug_ids"] = (
+        compounds["compound_uid"]
+        .map(
+            dti.groupby("compound_uid")["ot_drug_id"]
+            .agg(_join_dti_values)
+            .to_dict()
+        )
+        .fillna("")
+    )
+    return compounds
+
+
 def _gene_mapping_frame(
     raw_columns: Iterable[str], master: GeneMaster, *, source_table: str
 ) -> pd.DataFrame:
@@ -146,6 +207,8 @@ def build_canonical(
         return _build_tcga_only(config, paths, result, fetch_file_index=fetch_file_index)
     if only in {"drug_features"}:
         return _build_drug_features_only(config, paths, result)
+    if only in {"dti"}:
+        return _build_dti_only(config, paths, result)
 
     # ------------------------------------------------------------------
     # 1. 基因真源与三个组学矩阵
@@ -381,52 +444,33 @@ def build_canonical(
     )
 
     # ------------------------------------------------------------------
-    # 5. DTI（GDSC + Open Targets + ChEMBL + DGIdb）→ 药物特征
+    # 5. DTI（GDSC TARGET + Open Targets MoA）→ 药物特征
     # ------------------------------------------------------------------
-    dgidb_path = REPO_ROOT / "data" / "raw" / "dgidb" / "interactions.tsv"
     opentargets_dir = config.get("raw_files", {}).get(
         "opentargets_dir", REPO_ROOT / "data" / "raw" / "opentargets" / "26.09"
     )
-    chembl_dir = config.get("raw_files", {}).get(
-        "chembl_dir", REPO_ROOT / "data" / "raw" / "chembl" / "37"
+    include_chembl = bool(config.get("priors", {}).get("dti", {}).get("include_chembl", False))
+    chembl_dir = (
+        config.get("raw_files", {}).get("chembl_dir", REPO_ROOT / "data" / "raw" / "chembl" / "37")
+        if include_chembl
+        else None
     )
-    if dgidb_path.is_file():
-        dti, dti_info = build_dti(
-            compounds,
-            dgidb_path,
-            master,
-            allowed_genes=universes["teach_ge"],
-            opentargets_dir=opentargets_dir,
-            chembl_dir=chembl_dir,
+    if opentargets_dir and not Path(opentargets_dir).is_dir():
+        result["warnings"].append(
+            f"Open Targets 目录缺失：{opentargets_dir}；DTI 仅保留 GDSC TARGET 注释。"
         )
-        io.write_parquet(dti, paths.canonical / "dti.parquet")
-        result["stats"]["dti"] = dti_info
-        # 把 DTI 靶点并入 compounds，供药物靶点 multi-hot 使用
-        compounds["gdsc_target_genes"] = compounds["target_genes"].map(list)
-        dti_genes: dict[str, set[str]] = {}
-        for row in dti.itertuples(index=False):
-            dti_genes.setdefault(row.compound_uid, set()).add(row.hgnc_symbol)
-        base_genes = dict(zip(compounds["compound_uid"], compounds["target_genes"], strict=False))
-        compounds["target_genes"] = compounds["compound_uid"].map(
-            lambda uid: sorted(set(base_genes.get(uid, [])) | dti_genes.get(uid, set()))
-        )
-        compounds["has_gdsc_target"] = compounds["gdsc_target_genes"].map(len) > 0
-        compounds["has_target"] = compounds["target_genes"].map(len) > 0
-        compounds["has_dti"] = compounds["compound_uid"].isin(dti_genes)
-    else:
-        dti = pd.DataFrame(
-            columns=[
-                "compound_uid",
-                "hgnc_symbol",
-                "source",
-                "score",
-                "action_type",
-                "mechanism",
-                "target_name",
-            ]
-        )
-        io.write_parquet(dti, paths.canonical / "dti.parquet")
-        result["warnings"].append("DGIdb interactions.tsv 缺失，DTI 仅保留 GDSC 靶点文本。")
+        opentargets_dir = None
+    dti, dti_info = build_dti(
+        compounds,
+        master,
+        allowed_genes=universes["teach_ge"],
+        opentargets_dir=opentargets_dir,
+        chembl_dir=chembl_dir,
+    )
+    io.write_parquet(dti, paths.canonical / "dti.parquet")
+    result["stats"]["dti"] = dti_info
+    # 把 DTI 靶点并入 compounds，供药物靶点 multi-hot 使用
+    compounds = _apply_dti_to_compounds(compounds, dti)
 
     drug_arrays, drug_coverage = build_drug_features(
         compounds,
@@ -621,6 +665,71 @@ def _build_tcga_offline(
         io.write_parquet(ding, paths.interim / "canonical" / "tcga_ding2016.parquet")
         stats["ding2016"] = info
     return stats
+
+
+def _build_dti_only(
+    config: dict[str, Any],
+    paths: DataPaths,
+    result: dict[str, Any],
+) -> dict[str, Any]:
+    """只重建 canonical DTI 与 compounds 靶点列（不重跑组学/TCGA）。"""
+    from kite_drp.data.manifest import Manifest
+
+    compounds_path = paths.canonical / "compounds.parquet"
+    universe_path = paths.canonical / "gene_universes.json"
+    if not compounds_path.is_file() or not universe_path.is_file():
+        raise FileNotFoundError(
+            f"缺少 canonical 输入：{compounds_path} / {universe_path}；请先跑 data canonical"
+        )
+    compounds = io.read_parquet(compounds_path)
+    universes = io.read_json(universe_path)
+    master = build_gene_master(_raw_path(config, "hgnc", "data/raw/hgnc/Gene.csv"))
+
+    opentargets_dir = config.get("raw_files", {}).get(
+        "opentargets_dir", REPO_ROOT / "data" / "raw" / "opentargets" / "26.09"
+    )
+    include_chembl = bool(config.get("priors", {}).get("dti", {}).get("include_chembl", False))
+    chembl_dir = (
+        config.get("raw_files", {}).get("chembl_dir", REPO_ROOT / "data" / "raw" / "chembl" / "37")
+        if include_chembl
+        else None
+    )
+    if opentargets_dir and not Path(opentargets_dir).is_dir():
+        result["warnings"].append(
+            f"Open Targets 目录缺失：{opentargets_dir}；DTI 仅保留 GDSC TARGET 注释。"
+        )
+        opentargets_dir = None
+    base_compounds = compounds.copy()
+    base_column = "gdsc_target_genes" if "gdsc_target_genes" in base_compounds else "target_genes"
+    base_compounds["target_genes"] = base_compounds[base_column].map(_as_gene_list)
+    dti, info = build_dti(
+        base_compounds,
+        master,
+        allowed_genes=universes["teach_ge"],
+        opentargets_dir=opentargets_dir,
+        chembl_dir=chembl_dir,
+    )
+    io.write_parquet(dti, paths.canonical / "dti.parquet")
+    compounds = _apply_dti_to_compounds(compounds, dti)
+    io.write_parquet(compounds, compounds_path)
+    result["stats"]["dti"] = info
+
+    stats_path = paths.audit / "canonical_stats.json"
+    if stats_path.is_file():
+        payload = io.read_json(stats_path)
+        payload.setdefault("stats", {})["dti"] = info
+        payload.setdefault("warnings", []).extend(result["warnings"])
+        io.write_json(stats_path, payload)
+
+    manifest = Manifest(paths.canonical / "manifest.json")
+    manifest.artifacts.pop("dti", None)
+    manifest.register("dti.parquet", paths.canonical / "dti.parquet", layer="canonical")
+    manifest.register("compounds", compounds_path, layer="canonical", df=compounds)
+    manifest.save(extra={"partial_rebuild": "dti"})
+    result["artifacts"].extend(
+        [str(paths.canonical / "dti.parquet"), str(compounds_path)]
+    )
+    return result
 
 
 def _build_drug_features_only(

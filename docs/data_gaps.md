@@ -10,7 +10,7 @@
 |---|---|---|
 | GDSC2 标签 + 药物/细胞系元数据 | `data/raw/gdsc/` | ✅ 969 株 / 295 DRUG_ID / 286 化合物 |
 | DepMap Model/GE/MU/CNV | `data/raw/depmap/` | ✅ 1,719 GE / 1,968 MU / 1,118 CNV；主池 509 |
-| STRING v12.5 / HGNC / DGIdb | `data/raw/{string,hgnc,dgidb}/` | ✅ PPI 282,864 对；DTI 4,378 边 / 237 化合物 |
+| STRING v12.5 / HGNC / Open Targets | `data/raw/{string,hgnc,opentargets}/` | ✅ PPI 282,864 对；DTI 640 边 / 213 化合物（DGIdb 已停用） |
 | CCLE RRBS 甲基化（可选） | `data/raw/ccle/` | ✅ 默认关闭（D21） |
 | TCGA-CESC GE/MU/CNV/METH 原始文件 | `data/raw/tcga/CESC/` | ✅ 1,204 文件 |
 | TCGA clinical / CDR / Ding2016 | `data/raw/tcga/{clinical,cdr,ding2016}/` | ✅ 307 例 / 307 例 / 59 例顺铂 |
@@ -20,14 +20,15 @@
 | MSK-IMPACT 468 panel | `data/raw/panel/IMPACT468.txt` | ✅ 469 symbol / 462 交集 |
 
 当前 processed：M-716 教师输入、M-509 主评估子集、1,000 通路路线 A、462 基因学生 panel、
-260 例 TCGA GE+CNV+MU 评估集、18 splits × 3 seeds、90 fold fit-stats。
+DTI 640 边 / 213 化合物、260 例 TCGA GE+CNV+MU 评估集、18 splits × 3 seeds、90 fold fit-stats。
 
 **2026-11-18 自包含补全（ADR-0005）**：
 
 | 产物 | 内容 | 作用 |
 |---|---|---|
 | `teacher_pairs.parquet` | 235,478 行 pair 表（教师池 176,487 / 主池 126,803） | clone 后无需 canonical 标签 |
-| `graph_inputs.npz` | 16,197 基因 / 253,279 PPI / 4,395 DTI 边 | T1 建图不依赖 canonical |
+| `graph_inputs.npz` | 16,135 基因 / 253,279 PPI / 640 DTI 边（OT+GDSC） | T1 建图不依赖 canonical；DGIdb 已移除 |
+| `dti.parquet` / `dti_coverage.json` | 640 边 / 213 化合物 / 301 基因；匹配方式与未覆盖清单 | DTI 追溯与覆盖分组 |
 | `drug_features.npz` 分子图 | 286/286 药，77 维原子 + 4 维键，8,458 原子 / 18,422 双向边 | GIN 可训练 |
 
 自检入口：`uv run python -m kite_drp data preflight --target teacher`（T1 用 `teacher_t1`）。
@@ -40,7 +41,7 @@
 
 | 缺口 | 用途 | 下载方式 | 影响 |
 |---|---|---|---|
-| **Open Targets Platform**（targets/drugs parquet） | A_DG 药物-靶点主源；补 GDSC/DGIdb 未覆盖的 49 个化合物 | https://platform.opentargets.org/downloads （CC0 4.0） | ✅ 已下载 26.09 并预处理：466 条 MOA 边；合并 DTI 覆盖 **237/286** 化合物（49 个内部化合物仍无 DTI） |
+| **Open Targets Platform**（targets/drugs parquet） | A_DG 药物-靶点主源；替代 DGIdb | https://platform.opentargets.org/downloads （CC0 4.0） | ✅ 已下载 26.09 并重建：445 条 MOA 边；与 GDSC TARGET 合并后 **640 边 / 213/286** 化合物 |
 | **ChEMBL v36**（mechanisms / drug indications） | 药名桥接、DTI 补充、SMILES 兜底 | https://ftp.ebi.ac.uk/pub/databases/chembl/ChEMBLdb/latest/ （CC BY-SA **3.0**） | ✅ 已抓取 **ChEMBL 37** mechanism（7,561 行）与 drug_indication；新增 242 条机制边；v36 未落盘，版本差异见 manifest |
 | **GDSC1** 标签 | P5 外部验证：GDSC2 训练 → GDSC1 零样本 | https://www.cancerrxgene.org/downloads/bulk_download | ✅ 已下载 release 8.5 / 27Oct23（CancerRxGene 已 410，改用 Sanger COG 镜像）；外部验证主项；不混训 |
 | **CTRPv2** | P5 外部验证（AUC） | https://portals.broadinstitute.org/ctrp/ | ✅ 已下载 v21 AUC（Zenodo 处理版；原 NCI/Broad 直链已下线） |
@@ -60,7 +61,7 @@
 - 每个来源落盘 `download_manifest.json`，新文件 MD5 已并入 `data/raw/CHECKSUMS.md5`。
 - 许可说明：`data/licenses/{opentargets,chembl,gdsc1,ctrp,prism}.md`。
 - **已做预处理（2026-11-17）**：
-  - DTI 合并 GDSC + Open Targets + ChEMBL + DGIdb：4,395 边 / 237 化合物 / 1,663 靶点基因；Open Targets 466 边、ChEMBL 242 边。
+  - DTI 合并 GDSC TARGET + Open Targets：640 边 / 213 化合物 / 301 靶点基因；Open Targets 445 边、GDSC 334 边（139 边双源）；**DGIdb 已停用**，ChEMBL 默认不参与。
   - GDSC1：314,970 条化合物层标签；969 细胞系（509 在主池）；377 化合物，其中 127 个与 GDSC2 共有；交集 109,636 行。
   - CTRPv2：326,148 行 AUC；832 细胞系（420 在主池）；84 个与 GDSC2 共有化合物；交集 59,245 行。
   - PRISM：701,004 行 AUC；480 细胞系（280 在主池）；122 个与 GDSC2 共有化合物；交集 75,488 行。
@@ -98,7 +99,8 @@
 1. ~~**Open Targets**（CC0）→ 提升 DTI/药物图覆盖~~ ✅ 2026-11-17 已下载 26.09。
 2. ~~**GDSC1 + CTRPv2** → P5 外部验证~~ ✅ 2026-11-17 已下载 GDSC1 8.5 / CTRPv2.1 v21 AUC。
 3. ~~**PRISM** → 与 CTRPv2 并列的 external validation~~ ✅ 2026-11-17 已下载 secondary dose-response 参数。
-4. 下一步：把 P1 表接入 A_DG / P5 预处理，复核 DTI 覆盖与跨库药名映射。
+4. ~~下一步：把 P1 表接入 A_DG / P5 预处理，复核 DTI 覆盖与跨库药名映射。~~
+   ✅ 2026-11-20：DTI 已切换为 Open Targets + GDSC，processed `dti.parquet` / `dti_coverage.json` 已生成。
 5. 可选：MSigDB Hallmark、IMPACT505、TCGA RPPA/BRCA/LUAD。
 
 ## 5. 下载脚本/入口

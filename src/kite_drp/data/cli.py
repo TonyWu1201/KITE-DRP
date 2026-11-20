@@ -332,7 +332,11 @@ def register(subparsers: argparse._SubParsersAction) -> None:  # type: ignore[ty
 
     p = data_sub.add_parser("canonical", help="L1 canonical 产物")
     p.add_argument("--config", type=str, default=None)
-    p.add_argument("--only", choices=["tcga", "priors", "drug_features", "all"], default=None)
+    p.add_argument(
+        "--only",
+        choices=["tcga", "priors", "drug_features", "dti", "all"],
+        default=None,
+    )
     p.add_argument("--force", action="store_true")
     p.add_argument("--fetch-file-index", action="store_true")
     p.set_defaults(func=cmd_canonical)

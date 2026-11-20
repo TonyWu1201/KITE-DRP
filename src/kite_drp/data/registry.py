@@ -166,6 +166,20 @@ ARTIFACTS: dict[str, ArtifactSpec] = {
     "compounds_processed": ArtifactSpec(
         "compounds_processed", "data/processed/compounds.parquet", "processed", "data.assembly"
     ),
+    "dti_processed": ArtifactSpec(
+        "dti_processed",
+        "data/processed/dti.parquet",
+        "processed",
+        "data.drug_assembly",
+        description="Open Targets MoA + GDSC TARGET 药物-靶点边（DGIdb 不参与）",
+    ),
+    "dti_coverage": ArtifactSpec(
+        "dti_coverage",
+        "data/processed/dti_coverage.json",
+        "processed",
+        "data.drug_assembly",
+        description="DTI 来源/匹配方式/化合物覆盖审计",
+    ),
     "teacher_index": ArtifactSpec(
         "teacher_index", "data/processed/teacher_index.json", "processed", "data.assembly"
     ),

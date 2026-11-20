@@ -37,7 +37,7 @@ data/raw/
 │   ├── 9606.protein.aliases.v12.5.txt.gz
 │   ├── 9606.protein.links.v12.0.txt
 │   └── 9606.protein.aliases.v12.0.txt
-├── dgidb/                          ← DGIdb v5.0.13（2026-10）药物-基因交互
+├── dgidb/                          ← DGIdb v5.0.13（2026-10）**已停用，仅历史留档**
 │   ├── interactions.tsv
 │   ├── drugs.tsv
 │   ├── genes.tsv
@@ -56,7 +56,7 @@ data/raw/
 ├── panel/                          ← cBioPortal MSK-IMPACT 468（2026-11-17）
 │   ├── IMPACT468.txt
 │   └── IMPACT468_manifest.json
-├── opentargets/                    ← Open Targets Platform 26.09（P1，2026-11-17）
+├── opentargets/                    ← Open Targets Platform 26.09（DTI 主源；2026-11-20 复核）
 │   └── 26.09/
 │       ├── target/*.parquet
 │       ├── drug_molecule/*.parquet
@@ -99,12 +99,12 @@ data/raw/
 | string | `9606.protein.aliases.v12.5.txt.gz` | 19.8 MB | v12.5；3,889,207 行 | ENSP↔symbol 映射 | CC BY 4.0 |
 | string | `9606.protein.links.v12.0.txt` | 630.9 MB | v12.0（2023） | 旧版本留档/对照 | CC BY 4.0 |
 | string | `9606.protein.aliases.v12.0.txt` | 199.7 MB | v12.0 | 旧版本留档/对照 | CC BY 4.0 |
-| dgidb | `interactions.tsv` | 19.3 MB | DGIdb v5.0.13，data 2026-10；122,905 条 claim | E11 解释命中率校验 + A_DG 兜底（§4.6） | DGIdb（混合来源，再分发受限，内部研究用） |
-| dgidb | `drugs.tsv` / `genes.tsv` / `categories.tsv` | 14.7 MB | 同上（80,483 / 85,738 / 33,890 行） | 药/基因/类别映射 | 同上 |
+| dgidb | `interactions.tsv` | 19.3 MB | DGIdb v5.0.13，data 2026-10；122,905 条 claim | **已停用**：2026-11-20 起 DTI 不再读取；仅历史留档 | DGIdb（混合来源，再分发受限） |
+| dgidb | `drugs.tsv` / `genes.tsv` / `categories.tsv` | 14.7 MB | 同上（80,483 / 85,738 / 33,890 行） | 同上；不进入 canonical/processed | 同上 |
 | drugs | `smiles.tsv` / `smiles.parquet` | ~80 KB | PubChem 2026-11-17；286/286 化合物 | 药物图/Morgan FP/scaffold（§4.7） | PubChem 公共数据；再分发前核对 NCBI 条款 |
 | opentargets | `26.09/target/*.parquet` | 21.6 MB | 26.09；78,733 靶点 | A_DG 靶点主表 | **CC0 4.0** |
 | opentargets | `26.09/drug_molecule/00000000.parquet` | 6.9 MB | 26.09；19,170 分子 | 药物图/名称/结构/跨库 ID | **CC0 4.0** |
-| opentargets | `26.09/drug_mechanism_of_action/00000000.parquet` | 323 KB | 26.09；6,092 行 | DTI 主源（drug→target） | **CC0 4.0** |
+| opentargets | `26.09/drug_mechanism_of_action/00000000.parquet` | 323 KB | 26.09；6,092 行 | **DTI 主源**（drug→target；DGIdb 替代） | **CC0 4.0** |
 | opentargets | `26.09/clinical_indication/00000000.parquet` | 5.0 MB | 26.09；86,451 行 | 药物-适应症特征 | **CC0 4.0** |
 | chembl | `chembl_37_mechanism.{jsonl,tsv}.gz` | 1.1 MB | ChEMBL 37（2026-05-01）；7,561 行 | 机制/靶点补充 | **CC BY-SA 3.0**；见 `data/licenses/chembl.md` |
 | chembl | `chembl_37_drug_indication.{jsonl,tsv}.gz` | 8.2 MB | ChEMBL 37；60,055 行 | 适应症/药名桥接 | 同上（copyleft） |
@@ -160,6 +160,6 @@ data/raw/
 
 ## 5. 待补（本轮未做，见审计缺口清单）
 
-- **P1 外部数据已于 2026-11-17 补齐**：Open Targets 26.09、ChEMBL 37（mechanism/drug_indication）、GDSC1 8.5、CTRPv2.1 v21 AUC、PRISM secondary；详见 `docs/data_gaps.md` §2 与各来源 `download_manifest.json`。
+- **P1 外部数据已于 2026-11-17 补齐，2026-11-20 复核**：Open Targets 26.09（DTI 主源）、ChEMBL 37（mechanism/drug_indication，默认不参与 DTI）、GDSC1 8.5、CTRPv2.1 v21 AUC、PRISM secondary；详见 `docs/data_gaps.md` §2 与各来源 `download_manifest.json`。
 - 仍缺/可选：TCGA-BRCA/LUAD、MSigDB Hallmark、TCGA RPPA、IMPACT505、TCGA 非 ascat3 CNV、CCLE legacy 450K 等（P2/可选）。
 - 预处理缺口：P1 表接入 A_DG / P5、DTI 覆盖复核、跨库药名/细胞系映射（不在本次下载范围）。

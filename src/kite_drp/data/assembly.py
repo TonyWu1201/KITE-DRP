@@ -74,7 +74,9 @@ def build_teacher_inputs(canonical_dir: str | Path, processed_dir: str | Path) -
             "ge_observed_mask": np.ones(len(pool), dtype=bool),
             "cnv_observed_mask": cnv_mask,
             "mu_observed_mask": np.ones(len(pool), dtype=bool),
-            "eligible_mask": cell_lines.set_index("cell_line_uid").loc[pool, "eligible"].to_numpy(dtype=bool),
+            "eligible_mask": cell_lines.set_index("cell_line_uid")
+            .loc[pool, "eligible"]
+            .to_numpy(dtype=bool),
             "cell_line_uid": np.asarray(pool, dtype=np.str_),
             "ge_genes": np.asarray(expression.columns.tolist(), dtype=np.str_),
             "cnv_genes": np.asarray(cnv.columns.tolist(), dtype=np.str_),
@@ -238,7 +240,9 @@ def build_vae_target(canonical_dir: str | Path, processed_dir: str | Path) -> di
     }
 
 
-def build_tcga_inputs(canonical_dir: str | Path, processed_dir: str | Path) -> dict[str, Any] | None:
+def build_tcga_inputs(
+    canonical_dir: str | Path, processed_dir: str | Path
+) -> dict[str, Any] | None:
     """装配 TCGA 评估输入（purpose=eval）；缺少 file→case 映射时跳过。"""
     canonical = Path(canonical_dir)
     ge_path = canonical / "tcga_ge.npz"
@@ -293,7 +297,11 @@ def build_tcga_inputs(canonical_dir: str | Path, processed_dir: str | Path) -> d
             "red_line": "训练侧禁止加载；仅评估脚本可读",
         },
     )
-    return {"n_patients": len(patients), "n_ge_genes": int(ge["values"].shape[1]), "n_cnv_genes": int(cnv["values"].shape[1])}
+    return {
+        "n_patients": len(patients),
+        "n_ge_genes": int(ge["values"].shape[1]),
+        "n_cnv_genes": int(cnv["values"].shape[1]),
+    }
 
 
 def build_processed(
@@ -306,17 +314,20 @@ def build_processed(
     canonical = Path(canonical_dir)
     processed = Path(processed_dir)
     processed.mkdir(parents=True, exist_ok=True)
-    from kite_drp.data.drug_assembly import build_drug_inputs
+    from kite_drp.data.drug_assembly import build_drug_inputs, build_dti_inputs
 
     result: dict[str, Any] = {
         "teacher": None,
         "drug": None,
+        "dti": None,
         "pairs": None,
         "graph": None,
         "student": None,
         "vae": None,
         "tcga": None,
     }
+    if stage in {"all", "teacher", "drug", "graph"}:
+        result["dti"] = build_dti_inputs(canonical, processed)
     if stage in {"all", "teacher", "drug"}:
         result["drug"] = build_drug_inputs(canonical, processed)
     if stage in {"all", "teacher"}:
@@ -345,6 +356,8 @@ def build_processed(
         "pool_index",
         "drug_features_processed",
         "compounds_processed",
+        "dti_processed",
+        "dti_coverage",
         "panel_mutations",
         "mut_burden",
         "pathway_weights",
@@ -360,7 +373,10 @@ def build_processed(
     manifest.save(
         code=code_hash(),
         config=config_hash(config or {}),
-        extra={"degraded": [], "notes": ["processed artifacts are LFS-tracked; see docs/data_cards"]},
+        extra={
+            "degraded": [],
+            "notes": ["processed artifacts are LFS-tracked; see docs/data_cards"],
+        },
     )
     result["manifest"] = sorted(manifest.artifacts)
     return result
