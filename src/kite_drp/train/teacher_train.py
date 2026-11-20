@@ -107,6 +107,13 @@ def _build_model(
                     propagation=str(local_cfg.get("propagation", "trainable")),
                     dropout=float(local_cfg.get("dropout", teacher.get("dropout", 0.1))),
                     residual_shrink=float(local_cfg.get("residual_shrink", 1.0)),
+                    graph_head=bool(local_cfg.get("graph_head", False)),
+                    use_residual_head=bool(local_cfg.get("use_residual_head", True)),
+                    graph_condition=str(local_cfg.get("graph_condition", "cell")),
+                    graph_alpha_init=float(local_cfg.get("graph_alpha_init", 0.0)),
+                    attention_pool=bool(local_cfg.get("attention_pool", False)),
+                    use_gene_embedding=bool(local_cfg.get("use_gene_embedding", False)),
+                    edge_weighted=bool(local_cfg.get("edge_weighted", True)),
                 )
             return backbone
         if n_graph_genes is None or cell_in_dim is None:

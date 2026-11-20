@@ -56,10 +56,23 @@ local_graph:
   readout_hidden: 128
   # pair | cell | none：残差头读取哪一路冻结 P1 表征
   condition_on: pair
-  # trainable | fixed | none
+  # trainable | fixed | none | set（set 只做集合池化，不传播）
   propagation: trainable
   dropout: 0.1
   residual_shrink: 1.0
+  # graph-only 深监督：独立 y_graph 头，训练时用 teacher.train.graph_weight 监督；
+  # 最终 delta = gate * (tanh(alpha) * (y_graph - y_p1) + residual)。
+  graph_head: false
+  use_residual_head: true
+  # graph head 读取哪一路冻结 P1 表征；cell 可避免直接复制药物身份。
+  graph_condition: cell
+  graph_alpha_init: 0.0
+  # 根/非根分别做 masked attention pooling；false 时用均值。
+  attention_pool: false
+  # 节点读取 P1 靶点基因表（冻结）；非靶点行的随机初始化会被掩码。
+  use_gene_embedding: false
+  # 用 STRING 边权做加权邻居均值。
+  edge_weighted: true
   seed: 20261120
 
 train:
@@ -76,3 +89,7 @@ train:
   p1_lr_mult: 1.0
   graph_weight: 0.0
   graph_cls_weight: 0.0
+  # graph-only 头的逐药排序深监督（需要 local_graph.graph_head=true）。
+  graph_rank_weight: 0.0
+  # 逐药残差均值惩罚：让局部图只改药内排序，不移动药物基线。
+  center_weight: 0.0

@@ -12,7 +12,7 @@ from kite_drp.models.teacher.t0 import T0Teacher
 from kite_drp.models.teacher.t1_local import T1LocalTeacher, T1MlpHeadTeacher
 
 
-def _backbone() -> T0Teacher:
+def _backbone(*, target_branch: bool = False) -> T0Teacher:
     return T0Teacher(
         pathway_dim=6,
         morgan_dim=8,
@@ -32,7 +32,7 @@ def _backbone() -> T0Teacher:
         use_cls_proj=True,
         cls_proj_mode="lowrank",
         cls_proj_rank=2,
-        target_branch=False,
+        target_branch=target_branch,
         target_gene_layers=1,
         readout="sum",
         use_neighbor=False,
@@ -49,6 +49,9 @@ def _batch(
     node_root: torch.Tensor | None = None,
     node_pair: torch.Tensor | None = None,
     edge_index: torch.Tensor | None = None,
+    edge_weight: torch.Tensor | None = None,
+    node_gene: torch.Tensor | None = None,
+    node_gene_target: torch.Tensor | None = None,
     coverage: torch.Tensor | None = None,
     observed: torch.Tensor | None = None,
     has_neighbor: torch.Tensor | None = None,
@@ -81,6 +84,12 @@ def _batch(
         node_pair = torch.tensor([0, 0, 0, 1, 1, 1])
     if edge_index is None:
         edge_index = torch.tensor([[0, 1, 1, 2, 2, 0], [1, 0, 2, 1, 0, 2]])
+    if edge_weight is None:
+        edge_weight = torch.ones(edge_index.shape[1])
+    if node_gene is None:
+        node_gene = torch.zeros(node_root.shape[0], dtype=torch.long)
+    if node_gene_target is None:
+        node_gene_target = torch.ones(node_root.shape[0], dtype=torch.bool)
     if coverage is None:
         coverage = torch.tensor([True, True, False])
     if observed is None:
@@ -106,7 +115,10 @@ def _batch(
         local_node_values=node_values,
         local_node_root=node_root,
         local_node_pair=node_pair,
+        local_node_gene=node_gene,
+        local_node_gene_target=node_gene_target,
         local_edge_index=edge_index,
+        local_edge_weight=edge_weight,
         local_graph_ptr=torch.tensor([0, 3, 6]) if n_pairs == 3 else torch.tensor([0, 3]),
         local_graph_coverage=coverage,
         local_graph_observed=observed,
@@ -238,3 +250,73 @@ def test_t1_local_checkpoint_load_keeps_local_head() -> None:
     model.load_p1_checkpoint(backbone_state)
     for key, value in model.readout.state_dict().items():
         torch.testing.assert_close(value, local_state[key])
+
+
+def test_t1_local_graph_head_identity_and_blend() -> None:
+    model = _model(graph_head=True, use_residual_head=False, graph_condition="cell")
+    batch = _batch()
+    with torch.no_grad():
+        p1 = model.backbone(batch)
+        output = model(batch)
+    torch.testing.assert_close(output.y_hat, p1.y_hat)
+    assert "y_graph" in output.aux
+    assert torch.isfinite(output.aux["y_graph"]).all()
+    with torch.no_grad():
+        model.graph_alpha.fill_(0.5)
+        blended = model(batch)
+    delta = blended.y_hat - p1.y_hat
+    assert float(delta.abs().max()) > 0.0
+    uncovered = _batch(
+        coverage=torch.tensor([False, False, False]),
+        observed=torch.tensor([False, False, False]),
+    )
+    with torch.no_grad():
+        p1_uncovered = model.backbone(uncovered)
+        output_uncovered = model(uncovered)
+    torch.testing.assert_close(output_uncovered.y_hat, p1_uncovered.y_hat)
+
+
+def test_t1_local_attention_pool_and_edge_weight() -> None:
+    model = _model(attention_pool=True, edge_weighted=True)
+    batch = _batch(edge_weight=torch.tensor([1.0, 0.9, 0.0, 0.8, 0.7, 0.6]))
+    with torch.no_grad():
+        p1 = model.backbone(batch)
+        output = model(batch)
+    torch.testing.assert_close(output.y_hat, p1.y_hat)
+    assert torch.isfinite(output.aux["local_residual"]).all()
+
+
+def test_t1_local_uses_frozen_gene_table() -> None:
+    backbone = _backbone(target_branch=True)
+    batch = _batch(
+        node_gene=torch.tensor([0, 1, 2, 3, 4, 5], dtype=torch.long),
+        node_gene_target=torch.tensor([True, False, True, False, True, False]),
+    )
+    model = T1LocalTeacher(
+        backbone,
+        hidden=8,
+        readout_hidden=16,
+        dropout=0.0,
+        graph_head=True,
+        use_residual_head=False,
+        use_gene_embedding=True,
+        attention_pool=True,
+        edge_weighted=True,
+    )
+    with torch.no_grad():
+        p1 = model.backbone(batch)
+        output = model(batch)
+    torch.testing.assert_close(output.y_hat, p1.y_hat)
+    assert torch.isfinite(output.aux["y_graph"]).all()
+    assert all(
+        not parameter.requires_grad for parameter in backbone.target.gene_embedding.parameters()
+    )
+
+
+def test_neighbor_mean_uses_edge_weight() -> None:
+    from kite_drp.models.teacher.t1_local import _neighbor_mean
+
+    values = torch.tensor([[1.0], [3.0]])
+    edge_index = torch.tensor([[0, 1], [1, 0]])
+    weighted = _neighbor_mean(values, edge_index, torch.tensor([1.0, 0.0]))
+    torch.testing.assert_close(weighted, torch.tensor([[1.0], [1.0]]))

@@ -283,8 +283,8 @@ def _induced_edges(
     gene_to_graph: dict[str, int],
     adjacency: list[dict[int, float]],
     graph_genes: list[str],
-) -> tuple[np.ndarray, int]:
-    """在选中节点上取 PPI 诱导子图；返回双向边和唯一边数。"""
+) -> tuple[np.ndarray, np.ndarray, int]:
+    """在选中节点上取 PPI 诱导子图；返回双向边、边权和唯一边数。"""
 
     local_of_graph: dict[int, int] = {}
     graph_nodes: set[int] = set()
@@ -294,18 +294,29 @@ def _induced_edges(
             continue
         local_of_graph[graph_index] = local_index
         graph_nodes.add(graph_index)
-    pairs: set[tuple[int, int]] = set()
+    weighted: dict[tuple[int, int], float] = {}
     for graph_index in graph_nodes:
-        for neighbor in adjacency[graph_index]:
+        for neighbor, weight in adjacency[graph_index].items():
             if neighbor in graph_nodes and graph_index < neighbor:
-                pairs.add((local_of_graph[graph_index], local_of_graph[neighbor]))
-    if not pairs:
-        return np.zeros((2, 0), dtype=np.int64), 0
-    ordered = sorted(pairs)
+                pair = (local_of_graph[graph_index], local_of_graph[neighbor])
+                weighted[pair] = max(weighted.get(pair, 0.0), float(weight))
+    if not weighted:
+        return (
+            np.zeros((2, 0), dtype=np.int64),
+            np.zeros(0, dtype=np.float32),
+            0,
+        )
+    ordered = sorted(weighted.items())
     edge_index = np.asarray(
-        [[left for left, _ in ordered], [right for _, right in ordered]], dtype=np.int64
+        [[left for (left, _), _ in ordered], [right for (_, right), _ in ordered]],
+        dtype=np.int64,
     )
-    return np.concatenate([edge_index, edge_index[::-1]], axis=1), len(ordered)
+    edge_weight = np.asarray([weight for _, weight in ordered], dtype=np.float32)
+    return (
+        np.concatenate([edge_index, edge_index[::-1]], axis=1),
+        np.concatenate([edge_weight, edge_weight]),
+        len(ordered),
+    )
 
 
 def _empty_arrays() -> dict[str, np.ndarray]:
@@ -315,6 +326,7 @@ def _empty_arrays() -> dict[str, np.ndarray]:
         "node_root": np.zeros(0, dtype=bool),
         "edge_ptr": np.zeros(1, dtype=np.int64),
         "edge_index": np.zeros((2, 0), dtype=np.int64),
+        "edge_weight": np.zeros(0, dtype=np.float32),
         "coverage": np.zeros(0, dtype=bool),
         "coverage_ot": np.zeros(0, dtype=bool),
         "tier": np.zeros(0, dtype=np.str_),
@@ -343,6 +355,7 @@ def _assemble(
     node_gene: list[int] = []
     node_root: list[bool] = []
     edge_index: list[list[int]] = [[], []]
+    edge_weight: list[float] = []
     audit_rows: list[dict[str, Any]] = []
 
     for compound_uid, item in zip(compound_order, per_drug, strict=False):
@@ -355,7 +368,7 @@ def _assemble(
             if value not in seen:
                 seen.add(value)
                 nodes.append(value)
-        edges, n_edges = _induced_edges(
+        edges, weights, n_edges = _induced_edges(
             nodes,
             feature_genes=feature_genes,
             gene_to_graph=gene_to_graph,
@@ -368,6 +381,7 @@ def _assemble(
         node_ptr.append(node_start + len(nodes))
         edge_index[0].extend(edges[0].tolist())
         edge_index[1].extend(edges[1].tolist())
+        edge_weight.extend(weights.tolist())
         edge_ptr.append(edge_ptr[-1] + int(edges.shape[1]))
         tier = str(item.get("tier", "none"))
         arrays["coverage"] = np.append(arrays["coverage"], tier in {"ot", "gdsc_only"})
@@ -387,6 +401,8 @@ def _assemble(
                 "n_neighbors": len(nodes) - len(roots),
                 "n_nodes": len(nodes),
                 "n_edges": n_edges,
+                "edge_weight_mean": float(weights.mean()) if weights.size else 0.0,
+                "edge_weight_max": float(weights.max()) if weights.size else 0.0,
                 "root_genes": ";".join(feature_genes[index] for index in roots),
                 "neighbor_genes": ";".join(feature_genes[index] for index in nodes[len(roots) :]),
                 "trimmed": bool(item.get("trimmed", False)),
@@ -403,6 +419,7 @@ def _assemble(
         if edge_index[0]
         else np.zeros((2, 0), dtype=np.int64)
     )
+    arrays["edge_weight"] = np.asarray(edge_weight, dtype=np.float32)
     arrays["rewire_effective"] = np.zeros(len(compound_order), dtype=bool)
     return arrays, pd.DataFrame(audit_rows)
 
@@ -568,16 +585,22 @@ def _rewire_degree(
     result = {key: value.copy() for key, value in arrays.items()}
     result["rewire_effective"] = np.zeros(len(compound_order), dtype=bool)
     edge_index = result["edge_index"]
+    edge_weight = result["edge_weight"]
     for drug_index in range(len(compound_order)):
         start = int(result["edge_ptr"][drug_index])
         end = int(result["edge_ptr"][drug_index + 1])
         if end - start < 4:
             continue
         block = edge_index[:, start:end]
+        block_weight = edge_weight[start:end]
         pairs = {tuple(sorted((int(a), int(b)))) for a, b in block.T}
         pairs = {pair for pair in pairs if pair[0] != pair[1]}
         if len(pairs) < 2:
             continue
+        pair_weight: dict[tuple[int, int], float] = {}
+        for (a, b), weight in zip(block.T.tolist(), block_weight.tolist(), strict=False):
+            pair = tuple(sorted((int(a), int(b))))
+            pair_weight.setdefault(pair, float(weight))
         edge_list = sorted(pairs)
         rng = np.random.default_rng(int(seed) + drug_index)
         done = 0
@@ -611,6 +634,13 @@ def _rewire_degree(
             [[left for left, _ in ordered], [right for _, right in ordered]], dtype=np.int64
         )
         edge_index[:, start:end] = np.concatenate([local, local[::-1]], axis=1)
+        # 重连保留节点集、度数和边权多重集；权重与具体连边的对应关系被打乱，
+        # 避免真实 STRING 分数继续附着在新拓扑上。
+        weight_values = np.asarray(
+            [pair_weight.get(pair, 0.0) for pair in sorted(pair_weight)], dtype=np.float32
+        )
+        shuffled = np.random.default_rng(int(seed) + drug_index + 7919).permutation(weight_values)
+        edge_weight[start:end] = np.concatenate([shuffled, shuffled])
         result["rewire_effective"][drug_index] = True
     return result
 
@@ -649,6 +679,10 @@ def build_local_graphs(
     dti_sha = _sha256_file(dti_path)
     graph_sha = _sha256_file(graph_path)
     gene_space_sha = _sha256_bytes("\n".join(features.gene_ids).encode("utf-8"))
+    gene_is_target = np.zeros(len(features.gene_ids), dtype=bool)
+    for indices in drugs.target_indices:
+        gene_is_target[np.asarray(indices, dtype=np.int64)] = True
+    target_mask_sha = _sha256_bytes(np.ascontiguousarray(gene_is_target, dtype=np.bool_).tobytes())
     feature_valid_sha = _sha256_bytes(
         b"".join(
             np.ascontiguousarray(array, dtype=np.bool_).tobytes()
@@ -671,8 +705,9 @@ def build_local_graphs(
         "dti_sha256": dti_sha,
         "graph_inputs_sha256": graph_sha,
         "gene_space_sha256": gene_space_sha,
+        "target_mask_sha256": target_mask_sha,
         "feature_valid_sha256": feature_valid_sha,
-        "code_version": "local_graph_v2",
+        "code_version": "local_graph_v3",
     }
     cache_hash = _sha256_payload(spec_core)
     cache_root = _cache_root(processed, cache_dir) / cache_hash[:16]
@@ -747,6 +782,7 @@ def build_local_graphs(
         arrays = _rewire_degree(arrays, compound_order=drugs.compound_uid, seed=int(cfg["seed"]))
     if str(cfg["coverage"]) == "ot":
         arrays["coverage"] = arrays["coverage_ot"].copy()
+    arrays["gene_is_target"] = gene_is_target
 
     spec = {
         **spec_core,
@@ -755,6 +791,7 @@ def build_local_graphs(
         "n_drugs": len(drugs.compound_uid),
         "n_covered": int(arrays["coverage"].sum()),
         "n_covered_ot": int(arrays["coverage_ot"].sum()),
+        "n_target_genes": int(gene_is_target.sum()),
         "n_nodes": int(arrays["node_gene"].size),
         "n_edges": int(arrays["edge_index"].shape[1] // 2),
         "coverage_counts": {
@@ -786,25 +823,24 @@ def local_graph_tensors(
 
     arrays = bundle.arrays if isinstance(bundle, LocalGraphBundle) else bundle
     tensors: dict[str, torch.Tensor] = {}
-    for key in (
-        "node_ptr",
-        "node_gene",
-        "node_root",
-        "edge_ptr",
-        "edge_index",
-        "coverage",
-        "coverage_ot",
-        "n_roots",
-        "n_neighbors",
-        "rewire_effective",
-        "pseudo_exact",
-        "trimmed",
+    for key, dtype in (
+        ("node_ptr", torch.long),
+        ("node_gene", torch.long),
+        ("node_root", torch.bool),
+        ("edge_ptr", torch.long),
+        ("edge_index", torch.long),
+        ("edge_weight", torch.float32),
+        ("coverage", torch.bool),
+        ("coverage_ot", torch.bool),
+        ("n_roots", torch.long),
+        ("n_neighbors", torch.long),
+        ("rewire_effective", torch.bool),
+        ("pseudo_exact", torch.bool),
+        ("trimmed", torch.bool),
+        ("gene_is_target", torch.bool),
     ):
         value = np.asarray(arrays[key])
-        if value.dtype.kind == "b":
-            tensors[key] = torch.as_tensor(value, dtype=torch.bool, device=device)
-        else:
-            tensors[key] = torch.as_tensor(value, dtype=torch.long, device=device)
+        tensors[key] = torch.as_tensor(value, dtype=dtype, device=device)
     return tensors
 
 

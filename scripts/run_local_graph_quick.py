@@ -51,6 +51,123 @@ VARIANTS: dict[str, dict[str, Any]] = {
             "teacher.local_graph.neighbor_mode=pseudo",
         ),
     },
+    # 读出头诊断：残差是否主要依赖 P1 z_pair。
+    "no_pair": {
+        "teacher": "t1_local",
+        "overrides": (
+            "teacher.local_graph.propagation=set",
+            "teacher.local_graph.condition_on=none",
+        ),
+    },
+    "cell_cond": {
+        "teacher": "t1_local",
+        "overrides": (
+            "teacher.local_graph.propagation=set",
+            "teacher.local_graph.condition_on=cell",
+        ),
+    },
+    "center": {
+        "teacher": "t1_local",
+        "overrides": (
+            "teacher.local_graph.propagation=set",
+            "teacher.train.center_weight=0.5",
+        ),
+    },
+    # graph-only 深监督：独立 y_graph，逐药排序与绝对回归同时监督。
+    "gonly": {
+        "teacher": "t1_local",
+        "overrides": (
+            "teacher.local_graph.propagation=set",
+            "teacher.local_graph.graph_head=true",
+            "teacher.local_graph.use_residual_head=false",
+            "teacher.local_graph.graph_condition=cell",
+            "teacher.train.graph_weight=0.3",
+        ),
+    },
+    "gonly_rank": {
+        "teacher": "t1_local",
+        "overrides": (
+            "teacher.local_graph.propagation=set",
+            "teacher.local_graph.graph_head=true",
+            "teacher.local_graph.use_residual_head=false",
+            "teacher.local_graph.graph_condition=cell",
+            "teacher.train.graph_weight=0.3",
+            "teacher.train.graph_rank_weight=0.5",
+            "teacher.train.rank_weight=0.5",
+        ),
+    },
+    "gonly_alpha": {
+        "teacher": "t1_local",
+        "overrides": (
+            "teacher.local_graph.propagation=set",
+            "teacher.local_graph.graph_head=true",
+            "teacher.local_graph.use_residual_head=false",
+            "teacher.local_graph.graph_condition=cell",
+            "teacher.local_graph.graph_alpha_init=0.5",
+            "teacher.train.graph_weight=0.3",
+            "teacher.train.graph_rank_weight=0.5",
+            "teacher.train.rank_weight=0.5",
+        ),
+    },
+    "gonly_prop": {
+        "teacher": "t1_local",
+        "overrides": (
+            "teacher.local_graph.propagation=trainable",
+            "teacher.local_graph.graph_head=true",
+            "teacher.local_graph.use_residual_head=false",
+            "teacher.local_graph.graph_condition=cell",
+            "teacher.train.graph_weight=0.3",
+            "teacher.train.graph_rank_weight=0.5",
+            "teacher.train.rank_weight=0.5",
+        ),
+    },
+    "gonly_gene": {
+        "teacher": "t1_local",
+        "overrides": (
+            "teacher.local_graph.propagation=trainable",
+            "teacher.local_graph.graph_head=true",
+            "teacher.local_graph.use_residual_head=false",
+            "teacher.local_graph.graph_condition=cell",
+            "teacher.local_graph.attention_pool=true",
+            "teacher.local_graph.use_gene_embedding=true",
+            "teacher.local_graph.edge_weighted=true",
+            "teacher.train.graph_weight=0.3",
+            "teacher.train.graph_rank_weight=0.5",
+            "teacher.train.rank_weight=0.5",
+        ),
+    },
+    "mlp15": {
+        "teacher": "t1_mlp",
+        "overrides": ("teacher.local_graph.mlp_hidden=5836",),
+    },
+    "mlp_match": {
+        "teacher": "t1_mlp",
+        "overrides": ("teacher.local_graph.mlp_hidden=218",),
+    },
+    "t1_rand_ppi": {
+        "teacher": "t1",
+        "overrides": ("teacher.graph.rewire=ppi",),
+    },
+    "t1_rand_dti": {
+        "teacher": "t1",
+        "overrides": ("teacher.graph.rewire=dti",),
+    },
+    "t1_no_ppi": {
+        "teacher": "t1",
+        "overrides": ("teacher.graph.edge_drop=ppi",),
+    },
+    "t1_no_dti": {
+        "teacher": "t1",
+        "overrides": ("teacher.graph.edge_drop=dti",),
+    },
+    "t1_no_cg": {
+        "teacher": "t1",
+        "overrides": ("teacher.graph.edge_drop=cg",),
+    },
+    "t1_frozen": {
+        "teacher": "t1",
+        "overrides": ("teacher.train.freeze_p1_epochs=12",),
+    },
     # 阶段 2：传播对照。
     "no_prop": {
         "teacher": "t1_local",

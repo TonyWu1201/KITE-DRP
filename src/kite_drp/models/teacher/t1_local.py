@@ -8,8 +8,17 @@
   在不同细胞上产生不同消息。
 - P1 完全冻结；局部图只输出标量残差，初值为 0，无覆盖时精确回退 P1。
 
-首轮只实现一跳、等权均值、共享投影；两跳/边权/联合微调留到一跳对照
-有信号后再评估。
+快速筛选第一轮（集合池化 + 残差头）显示图层没有超过仅根/伪邻居。该版本
+增加了三个针对性选项：
+
+1. ``graph_head``：独立的 graph-only 预测头 ``y_graph``，由训练引擎用
+   ``graph_weight`` 深监督，避免融合 gate 学到 0 后图层不学习；
+2. ``attention_pool``：根/非根分别做带掩码的 attention pooling，而不是
+   简单均值；
+3. ``use_gene_embedding`` / ``edge_weighted``：节点读取冻结 P1 基因表的
+   靶点行，并按 STRING 边权聚合邻居。
+
+默认值保持第一轮行为，便于复现旧结果。
 """
 
 from __future__ import annotations
@@ -39,16 +48,53 @@ def _masked_pool(
     return total / count.clamp_min(1.0).unsqueeze(-1), count
 
 
-def _neighbor_mean(values: Tensor, edge_index: Tensor) -> Tensor:
-    """无向边上的等权邻居均值；孤立节点以自身状态作为消息。"""
+def _masked_attention_pool(
+    values: Tensor,
+    pair_index: Tensor,
+    mask: Tensor,
+    *,
+    n_pairs: int,
+    scorer: nn.Module,
+) -> tuple[Tensor, Tensor]:
+    """按 pair 做 masked softmax pooling；空集合返回 0。"""
+
+    scores = scorer(values).squeeze(-1)
+    scores = scores.masked_fill(~mask, torch.finfo(scores.dtype).min)
+    max_per_pair = torch.full(
+        (n_pairs,), torch.finfo(scores.dtype).min, dtype=scores.dtype, device=scores.device
+    )
+    max_per_pair = max_per_pair.scatter_reduce_(
+        0, pair_index, scores, reduce="amax", include_self=True
+    )
+    exp = torch.exp(scores - max_per_pair[pair_index]) * mask.to(scores.dtype)
+    denom = torch.zeros(n_pairs, dtype=scores.dtype, device=scores.device)
+    denom = denom.index_add_(0, pair_index, exp)
+    weights = exp / denom[pair_index].clamp_min(torch.finfo(scores.dtype).tiny)
+    pooled = torch.zeros((n_pairs, values.shape[-1]), dtype=values.dtype, device=values.device)
+    pooled = pooled.index_add_(0, pair_index, values * weights.unsqueeze(-1))
+    count = torch.zeros(n_pairs, dtype=values.dtype, device=values.device)
+    count = count.index_add_(0, pair_index, mask.to(values.dtype))
+    return pooled, count
+
+
+def _neighbor_mean(
+    values: Tensor,
+    edge_index: Tensor,
+    edge_weight: Tensor | None = None,
+) -> Tensor:
+    """无向边上的邻居均值；孤立节点以自身状态作为消息。"""
 
     if edge_index.numel() == 0:
         return values
     source, target = edge_index[0], edge_index[1]
+    if edge_weight is None:
+        weight = torch.ones(target.shape[0], dtype=values.dtype, device=values.device)
+    else:
+        weight = edge_weight.to(values.dtype).clamp_min(0.0)
     total = torch.zeros_like(values)
-    total = total.index_add_(0, target, values[source])
+    total = total.index_add_(0, target, values[source] * weight.unsqueeze(-1))
     degree = torch.zeros(values.shape[0], dtype=values.dtype, device=values.device)
-    degree = degree.index_add_(0, target, torch.ones_like(target, dtype=values.dtype))
+    degree = degree.index_add_(0, target, weight)
     mean = total / degree.clamp_min(1.0).unsqueeze(-1)
     return torch.where(degree.unsqueeze(-1) > 0, mean, values)
 
@@ -63,45 +109,93 @@ class T1LocalTeacher(nn.Module):
         hidden: int = 64,
         readout_hidden: int = 128,
         condition_on: str = "pair",  # pair | cell | none
-        propagation: str = "trainable",  # trainable | fixed | none
+        propagation: str = "trainable",  # trainable | fixed | none | set
         dropout: float = 0.1,
         residual_shrink: float = 1.0,
+        graph_head: bool = False,
+        use_residual_head: bool = True,
+        graph_condition: str = "cell",  # pair | cell | none
+        graph_alpha_init: float = 0.0,
+        attention_pool: bool = False,
+        use_gene_embedding: bool = False,
+        edge_weighted: bool = True,
     ) -> None:
         super().__init__()
         if condition_on not in {"pair", "cell", "none"}:
             raise ValueError(f"condition_on 必须是 pair/cell/none，收到 {condition_on}")
+        if graph_condition not in {"pair", "cell", "none"}:
+            raise ValueError(f"graph_condition 必须是 pair/cell/none，收到 {graph_condition}")
         if propagation not in {"trainable", "fixed", "none", "set"}:
             raise ValueError(f"propagation 必须是 trainable/fixed/none/set，收到 {propagation}")
         self.backbone = backbone
         self.d_model = int(backbone.d_model)
         self.hidden = int(hidden)
         self.condition_on = str(condition_on)
+        self.graph_condition = str(graph_condition)
         self.propagation = str(propagation)
         self.residual_shrink = float(residual_shrink)
         self.dropout = nn.Dropout(dropout)
+        self.graph_head = bool(graph_head)
+        self.use_residual_head = bool(use_residual_head) or not self.graph_head
+        self.attention_pool = bool(attention_pool)
+        self.use_gene_embedding = bool(use_gene_embedding)
+        self.edge_weighted = bool(edge_weighted)
+
+        table = _gene_embedding_table(backbone)
+        self.gene_emb_dim = int(table.embedding_dim) if table is not None else 0
+        if self.use_gene_embedding and table is None:
+            raise ValueError("use_gene_embedding=True 需要 P1 backbone 的 target 基因表")
+        node_in_dim = 6 + (self.gene_emb_dim if self.use_gene_embedding else 0)
         # 6 维：GE/MU/CNV 值 + 三个 observed flag；根标记单独传入。
         self.node_in = nn.Sequential(
-            nn.Linear(6, self.hidden),
+            nn.Linear(node_in_dim, self.hidden),
             nn.GELU(),
             nn.LayerNorm(self.hidden),
         )
+        if self.use_gene_embedding:
+            # 基因身份从“无贡献”开始，避免 P1 靶点表的随机邻居行早期扰动。
+            with torch.no_grad():
+                self.node_in[0].weight[:, 6:] = 0.0
         self.message = nn.Linear(self.hidden, self.hidden)
         self.norm = nn.LayerNorm(self.hidden)
-        cond_dim = {
-            "pair": self.d_model,
-            "cell": self.d_model,
-            "none": 0,
-        }[self.condition_on]
-        readout_in = self.hidden * 2 + 6 + cond_dim
-        self.readout = nn.Sequential(
-            nn.Linear(readout_in, int(readout_hidden)),
-            nn.GELU(),
-            nn.Dropout(dropout),
-            nn.Linear(int(readout_hidden), 1),
-        )
-        # 首次参数更新前严格等于 P1；图层必须自己“挣出”残差。
-        nn.init.zeros_(self.readout[-1].weight)
-        nn.init.zeros_(self.readout[-1].bias)
+        self.pool_score = nn.Linear(self.hidden, 1) if self.attention_pool else None
+
+        if self.use_residual_head:
+            cond_dim = {
+                "pair": self.d_model,
+                "cell": self.d_model,
+                "none": 0,
+            }[self.condition_on]
+            readout_in = self.hidden * 2 + 6 + cond_dim
+            self.readout = nn.Sequential(
+                nn.Linear(readout_in, int(readout_hidden)),
+                nn.GELU(),
+                nn.Dropout(dropout),
+                nn.Linear(int(readout_hidden), 1),
+            )
+            # 首次参数更新前严格等于 P1；图层必须自己“挣出”残差。
+            nn.init.zeros_(self.readout[-1].weight)
+            nn.init.zeros_(self.readout[-1].bias)
+        else:
+            self.readout = None
+
+        if self.graph_head:
+            graph_cond_dim = {
+                "pair": self.d_model,
+                "cell": self.d_model,
+                "none": 0,
+            }[self.graph_condition]
+            graph_in = self.hidden * 2 + 6 + graph_cond_dim
+            self.graph_readout = nn.Sequential(
+                nn.Linear(graph_in, int(readout_hidden)),
+                nn.GELU(),
+                nn.Dropout(dropout),
+                nn.Linear(int(readout_hidden), 1),
+            )
+            self.graph_alpha = nn.Parameter(torch.tensor(float(graph_alpha_init)))
+        else:
+            self.graph_readout = None
+            self.graph_alpha = None
         self._freeze_backbone()
 
     def _freeze_backbone(self) -> None:
@@ -125,50 +219,73 @@ class T1LocalTeacher(nn.Module):
         self.backbone.eval()
         return self.backbone(batch)
 
-    def _readout_input(
+    def _node_input(self, batch: TeacherBatch) -> Tensor:
+        values = batch.local_node_values
+        assert values is not None
+        if not self.use_gene_embedding:
+            return values.float()
+        table = _gene_embedding_table(self.backbone)
+        assert table is not None
+        node_gene = batch.local_node_gene
+        if node_gene is None:
+            raise ValueError("use_gene_embedding=True 需要 batch.local_node_gene")
+        embedded = table(node_gene)
+        if batch.local_node_gene_target is not None:
+            embedded = embedded * batch.local_node_gene_target.unsqueeze(-1).to(embedded.dtype)
+        return torch.cat([values.float(), embedded.float()], dim=-1)
+
+    def _pool(
         self,
-        pooled_root: Tensor,
-        pooled_nonroot: Tensor,
-        markers: Tensor,
-        p1: TeacherOutput,
-    ) -> Tensor:
-        if self.condition_on == "pair":
-            condition = p1.z_pair
-        elif self.condition_on == "cell":
-            condition = p1.z_cell
-        else:
-            condition = pooled_root.new_zeros((pooled_root.shape[0], 0))
-        return torch.cat(
-            [pooled_root, pooled_nonroot, markers, condition.to(pooled_root.dtype)], dim=-1
+        values: Tensor,
+        pair_index: Tensor,
+        mask: Tensor,
+        *,
+        n_pairs: int,
+    ) -> tuple[Tensor, Tensor]:
+        if self.pool_score is None:
+            return _masked_pool(values, pair_index, mask, n_pairs=n_pairs)
+        return _masked_attention_pool(
+            values,
+            pair_index,
+            mask,
+            n_pairs=n_pairs,
+            scorer=self.pool_score,
         )
+
+    def _condition(self, name: str, p1: TeacherOutput, like: Tensor) -> Tensor:
+        if name == "pair":
+            return p1.z_pair.to(like.dtype)
+        if name == "cell":
+            return p1.z_cell.to(like.dtype)
+        return like.new_zeros((like.shape[0], 0))
 
     def forward(self, batch: TeacherBatch) -> TeacherOutput:
         if batch.local_node_values is None or batch.local_node_pair is None:
             raise ValueError("T1LocalTeacher 需要 batch.local_* 字段；检查 make_loader")
         p1 = self._p1_forward(batch)
         n_pairs = int(batch.y.shape[0])
-        node_values = batch.local_node_values
         node_root = batch.local_node_root
         pair_index = batch.local_node_pair
         edge_index = batch.local_edge_index
         assert node_root is not None and edge_index is not None
 
-        with torch.autocast(device_type=node_values.device.type, enabled=False):
-            h0 = self.node_in(node_values.float())
+        with torch.autocast(device_type=batch.local_node_values.device.type, enabled=False):
+            h0 = self.node_in(self._node_input(batch))
+            edge_weight = batch.local_edge_weight if self.edge_weighted else None
             if self.propagation == "set":
                 h1 = h0
             elif self.propagation == "none":
                 message = h0
                 h1 = self.norm(h0 + F.gelu(self.message(message)))
             elif self.propagation == "fixed":
-                message = _neighbor_mean(h0, edge_index)
+                message = _neighbor_mean(h0, edge_index, edge_weight)
                 h1 = self.norm(h0 + message)
             else:
-                message = _neighbor_mean(h0, edge_index)
+                message = _neighbor_mean(h0, edge_index, edge_weight)
                 h1 = self.norm(h0 + F.gelu(self.message(message)))
 
-            pooled_root, n_roots = _masked_pool(h1, pair_index, node_root, n_pairs=n_pairs)
-            pooled_nonroot, n_nonroot = _masked_pool(h1, pair_index, ~node_root, n_pairs=n_pairs)
+            pooled_root, n_roots = self._pool(h1, pair_index, node_root, n_pairs=n_pairs)
+            pooled_nonroot, n_nonroot = self._pool(h1, pair_index, ~node_root, n_pairs=n_pairs)
             n_nodes = (n_roots + n_nonroot).clamp_min(1.0)
             coverage = batch.local_graph_coverage
             observed = batch.local_graph_observed
@@ -185,16 +302,30 @@ class T1LocalTeacher(nn.Module):
                 ],
                 dim=-1,
             )
-            readout_in = self._readout_input(pooled_root, pooled_nonroot, markers, p1)
-            raw_residual = self.readout(self.dropout(readout_in)).squeeze(-1)
-            gate = coverage.to(raw_residual.dtype) * observed.to(raw_residual.dtype)
-            delta = self.residual_shrink * gate * raw_residual
+            gate = coverage.to(h1.dtype) * observed.to(h1.dtype)
+            pre_gate = torch.zeros(n_pairs, dtype=h1.dtype, device=h1.device)
+            y_graph: Tensor | None = None
+            blend: Tensor | None = None
+            if self.graph_head:
+                assert self.graph_readout is not None and self.graph_alpha is not None
+                condition = self._condition(self.graph_condition, p1, pooled_root)
+                graph_in = torch.cat([pooled_root, pooled_nonroot, markers, condition], dim=-1)
+                y_graph = self.graph_readout(self.dropout(graph_in)).squeeze(-1)
+                blend = torch.tanh(self.graph_alpha.to(y_graph.dtype))
+                pre_gate = pre_gate + blend * (y_graph - p1.y_hat.float())
+            if self.use_residual_head:
+                assert self.readout is not None
+                condition = self._condition(self.condition_on, p1, pooled_root)
+                readout_in = torch.cat([pooled_root, pooled_nonroot, markers, condition], dim=-1)
+                raw_residual = self.readout(self.dropout(readout_in)).squeeze(-1)
+                pre_gate = pre_gate + self.residual_shrink * raw_residual
+            delta = gate * pre_gate
         y_hat = p1.y_hat + delta.to(p1.y_hat.dtype)
         aux = dict(p1.aux)
         aux.update(
             {
                 "y_p1": p1.y_hat,
-                "local_residual": raw_residual,
+                "local_residual": pre_gate,
                 "local_delta": delta,
                 "local_gate": gate,
                 "local_nodes": n_nodes,
@@ -204,6 +335,10 @@ class T1LocalTeacher(nn.Module):
                 "local_observed": observed,
             }
         )
+        if y_graph is not None:
+            aux["y_graph"] = y_graph
+        if blend is not None:
+            aux["graph_alpha"] = blend.detach()
         return TeacherOutput(
             y_hat=y_hat,
             logits=p1.logits,
@@ -215,6 +350,12 @@ class T1LocalTeacher(nn.Module):
 
     def load_p1_checkpoint(self, state: dict[str, Tensor]) -> None:
         self.backbone.load_state_dict(state, strict=False)
+
+
+def _gene_embedding_table(backbone: T0Teacher) -> nn.Embedding | None:
+    target = getattr(backbone, "target", None)
+    table = getattr(target, "gene_embedding", None) if target is not None else None
+    return table if isinstance(table, nn.Embedding) else None
 
 
 class T1MlpHeadTeacher(nn.Module):

@@ -268,6 +268,8 @@ def _local_graph_batch(
     node_root_all = np.asarray(local_arrays["node_root"], dtype=bool)
     edge_ptr = np.asarray(local_arrays["edge_ptr"], dtype=np.int64)
     edge_index_all = np.asarray(local_arrays["edge_index"], dtype=np.int64)
+    edge_weight_all = np.asarray(local_arrays["edge_weight"], dtype=np.float32)
+    gene_is_target = np.asarray(local_arrays["gene_is_target"], dtype=bool)
     n_pairs = int(len(drug_idx))
 
     n_nodes = node_ptr[drug_idx + 1] - node_ptr[drug_idx]
@@ -313,8 +315,10 @@ def _local_graph_batch(
         drug_edge_start = edge_ptr[drug_idx[edge_pair]]
         edge_nodes = edge_index_all[:, drug_edge_start + edge_local]
         edge_index = edge_nodes + pair_node_ptr[edge_pair][None, :]
+        edge_weight = edge_weight_all[drug_edge_start + edge_local]
     else:
         edge_index = np.zeros((2, 0), dtype=np.int64)
+        edge_weight = np.zeros(0, dtype=np.float32)
 
     coverage = np.asarray(local_arrays["coverage"], dtype=bool)[drug_idx]
     has_neighbor = np.asarray(local_arrays["n_neighbors"], dtype=np.int64)[drug_idx] > 0
@@ -322,7 +326,10 @@ def _local_graph_batch(
         "local_node_values": torch.from_numpy(values),
         "local_node_root": torch.from_numpy(node_root),
         "local_node_pair": torch.from_numpy(node_pair),
+        "local_node_gene": torch.from_numpy(node_gene),
+        "local_node_gene_target": torch.from_numpy(gene_is_target[node_gene]),
         "local_edge_index": torch.from_numpy(edge_index.astype(np.int64, copy=False)),
+        "local_edge_weight": torch.from_numpy(edge_weight.astype(np.float32, copy=False)),
         "local_graph_ptr": torch.from_numpy(pair_node_ptr),
         "local_graph_coverage": torch.from_numpy(coverage),
         "local_graph_observed": torch.from_numpy(observed_root),

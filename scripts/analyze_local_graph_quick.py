@@ -15,13 +15,13 @@ import pandas as pd
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
-def _per_drug(frame: pd.DataFrame) -> pd.DataFrame:
+def _per_drug(frame: pd.DataFrame, pred_col: str = "y_pred") -> pd.DataFrame:
     rows = []
     for compound, group in frame.groupby("compound_uid", sort=False):
-        group = group.dropna(subset=["y_true", "y_pred"])
+        group = group.dropna(subset=["y_true", pred_col])
         if len(group) < 10 or group["y_true"].nunique() < 2:
             continue
-        value = group[["y_pred", "y_true"]].corr(method="spearman").iloc[0, 1]
+        value = group[[pred_col, "y_true"]].corr(method="spearman").iloc[0, 1]
         rows.append({"compound_uid": compound, "n": len(group), "scc": float(value)})
     return pd.DataFrame(rows)
 
@@ -47,7 +47,9 @@ def _load(path: Path) -> pd.DataFrame:
         raise FileNotFoundError(path)
     frame = pd.read_parquet(path)
     keep = ["cell_line_uid", "compound_uid", "y_true", "y_pred"]
-    return frame[keep].dropna()
+    if "y_graph_pred" in frame.columns:
+        keep.append("y_graph_pred")
+    return frame[keep].dropna(subset=["y_true", "y_pred"])
 
 
 def main() -> None:
@@ -87,6 +89,29 @@ def main() -> None:
         )
         per = per.merge(cov, on="compound_uid", how="left")
         per["delta"] = per["var_scc"] - per["p1_scc"]
+        graph_summary: dict[str, float] = {}
+        if "y_graph_pred" in merged.columns:
+            graph_per = _per_drug(
+                merged.rename(columns={"y_true_var": "y_true"}),
+                pred_col="y_graph_pred",
+            ).rename(columns={"scc": "graph_scc"})
+            if not graph_per.empty:
+                per = per.merge(
+                    graph_per[["compound_uid", "graph_scc"]], on="compound_uid", how="left"
+                )
+                per["graph_delta"] = per["graph_scc"] - per["p1_scc"]
+                graph_summary = {
+                    "mean_graph_scc": float(per["graph_scc"].mean()),
+                    "mean_graph_delta": float(per["graph_delta"].mean()),
+                    "graph_fraction_improved": float((per["graph_delta"] > 0).mean()),
+                    "graph_by_coverage": {
+                        key: {
+                            "n": int(len(group)),
+                            "mean_graph_delta": float(group["graph_delta"].mean()),
+                        }
+                        for key, group in per.groupby("coverage")
+                    },
+                }
         summary = {
             "n_drugs": int(len(per)),
             "mean_var_scc": float(per["var_scc"].mean()),
@@ -94,6 +119,7 @@ def main() -> None:
             "mean_delta": float(per["delta"].mean()),
             "fraction_improved": float((per["delta"] > 0).mean()),
             "fraction_worse_002": float((per["delta"] < -0.02).mean()),
+            **graph_summary,
             "by_coverage": {
                 key: {
                     "n": int(len(group)),
