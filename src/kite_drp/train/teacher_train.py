@@ -22,6 +22,7 @@ from kite_drp.data.dataset import TeacherPairDataset
 from kite_drp.models.teacher.b0 import BilinearTeacher
 from kite_drp.models.teacher.common import count_parameters
 from kite_drp.models.teacher.t0 import T0Teacher
+from kite_drp.models.teacher.t1 import T1Teacher
 from kite_drp.train.data import build_pair_tensors, make_loader
 from kite_drp.train.engine import evaluate, fit_teacher, resolve_device, set_seed
 from kite_drp.train.features import (
@@ -31,6 +32,7 @@ from kite_drp.train.features import (
     resolve_neighbor_source,
     resolve_similarity_config,
 )
+from kite_drp.train.t1_graph import build_t1_graph, graph_tensors
 
 
 def _build_model(
@@ -39,6 +41,8 @@ def _build_model(
     pathway_dim: int,
     morgan_dim: int,
     n_target_genes: int,
+    n_graph_genes: int | None = None,
+    cell_in_dim: int | None = None,
 ) -> torch.nn.Module:
     teacher = config["teacher"]
     name = str(teacher.get("name", "t0"))
@@ -57,8 +61,9 @@ def _build_model(
     }
     if name == "b0":
         return BilinearTeacher(**common)
-    if name in {"t0", "t0_p0", "t0_p1"}:
-        return T0Teacher(
+    if name in {"t0", "t0_p0", "t0_p1", "t1", "t1_graph_only"}:
+        graph_model = name in {"t1", "t1_graph_only"}
+        backbone = T0Teacher(
             **common,
             n_heads=int(teacher.get("n_heads", 4)),
             n_layers=int(teacher.get("n_layers", 2)),
@@ -80,8 +85,27 @@ def _build_model(
             cls_proj_rank=int(teacher.get("cls_proj_rank", 64)),
             target_branch=bool(teacher.get("target_branch", False)),
             target_gene_layers=int(teacher.get("target_gene_layers", 1)),
+            use_gene_table=not graph_model,
+            use_target_table=not graph_model,
         )
-    raise KeyError(f"本轮只实现 b0/t0/t0_p0/t0_p1，收到 teacher={name}")
+        if not graph_model:
+            return backbone
+        if n_graph_genes is None or cell_in_dim is None:
+            raise ValueError("T1 需要 n_graph_genes / cell_in_dim")
+        graph_cfg = teacher.get("graph", {}) or {}
+        return T1Teacher(
+            backbone,
+            n_full_genes=n_target_genes,
+            n_graph_genes=int(n_graph_genes),
+            cell_in_dim=int(cell_in_dim),
+            gene_emb_dim=int(teacher.get("target_embed_dim", 16)),
+            graph_hidden=int(graph_cfg.get("hidden", 128)),
+            graph_layers=int(graph_cfg.get("layers", 2)),
+            graph_heads=int(graph_cfg.get("heads", 4)),
+            dropout=float(graph_cfg.get("dropout", teacher.get("dropout", 0.1))),
+            use_backbone=name != "t1_graph_only",
+        )
+    raise KeyError(f"本轮只实现 b0/t0/t0_p0/t0_p1/t1/t1_graph_only，收到 teacher={name}")
 
 
 def _split_id(config: dict[str, Any]) -> str:
@@ -137,7 +161,8 @@ def _run_fold(
     neighbor_source = resolve_neighbor_source(config["teacher"], active_modalities)
     similarity_enabled = (
         bool(config.get("similarity", {}).get("enabled", True))
-        and str(config["teacher"].get("name", "t0")) in {"t0", "t0_p0", "t0_p1"}
+        and str(config["teacher"].get("name", "t0"))
+        in {"t0", "t0_p0", "t0_p1", "t1", "t1_graph_only"}
         and bool(config["teacher"].get("use_neighbor", True))
     )
     target_max_tokens = (
@@ -174,8 +199,25 @@ def _run_fold(
             target_modalities=active_modalities,
         )
 
+    teacher_name = str(config["teacher"].get("name", "t0"))
+    graph_bundle: dict[str, Any] | None = None
+    graph_arrays: dict[str, Any] | None = None
+    if teacher_name in {"t1", "t1_graph_only"}:
+        graph_bundle = build_t1_graph(
+            processed,
+            split_id=split_id,
+            fold=fold,
+            config=config["teacher"].get("graph", {}),
+            split_dir=splits,
+        )
+        graph_arrays = graph_bundle["arrays"]
+
     train_cfg = dict(config["train"])
     train_cfg.update(config["teacher"].get("train", {}))
+    graph_cfg = config["teacher"].get("graph", {}) or {}
+    if teacher_name in {"t1", "t1_graph_only"}:
+        train_cfg.setdefault("graph_weight", float(graph_cfg.get("graph_weight", 0.0)))
+        train_cfg.setdefault("graph_cls_weight", float(graph_cfg.get("graph_cls_weight", 0.0)))
     use_gin = bool(config["teacher"].get("use_gin", False))
     batch_size = int(train_cfg.get("batch_size", 512))
     rank_weight = float(train_cfg.get("rank_weight", 0.0))
@@ -221,6 +263,10 @@ def _run_fold(
         pathway_dim=int(features.ge.shape[1]),
         morgan_dim=int(drugs.morgan.shape[1]),
         n_target_genes=drugs.target_dim,
+        n_graph_genes=(int(len(graph_arrays["gene_ids"])) if graph_arrays is not None else None),
+        cell_in_dim=(
+            int(graph_arrays["cell_features"].shape[1]) if graph_arrays is not None else None
+        ),
     )
     params = count_parameters(model)
     target = int(config["teacher"].get("params_target", 5_000_000))
@@ -245,6 +291,22 @@ def _run_fold(
 
     device = resolve_device(str(train_cfg.get("device", "auto")))
     model = model.to(device)
+    if graph_arrays is not None:
+        model.set_graph(graph_tensors(graph_arrays))  # type: ignore[attr-defined]
+        init_from = config["teacher"].get("init_from")
+        if init_from:
+            init_path = Path(str(init_from))
+            if not init_path.is_absolute():
+                init_path = REPO_ROOT / init_path
+            if init_path.is_dir():
+                init_path = init_path / f"fold{fold}" / "best.pt"
+            checkpoint = torch.load(init_path, map_location=device, weights_only=False)
+            state = checkpoint.get("model", checkpoint)
+            model.load_p1_checkpoint(state)  # type: ignore[attr-defined]
+            print(
+                json.dumps({"init_from": str(init_path)}, ensure_ascii=False),
+                flush=True,
+            )
     fold_dir = run_dir / f"fold{fold}"
     result = fit_teacher(
         model,
@@ -276,6 +338,8 @@ def _run_fold(
         "n_genes": int(features.gene_ge.shape[1]),
         "target_max_tokens": target_max_tokens,
         "teacher": config["teacher"],
+        "graph": config["teacher"].get("graph", {}) if graph_arrays is not None else None,
+        "graph_spec": graph_bundle["spec"] if graph_bundle is not None else None,
     }
     (fold_dir / "model_spec.json").write_text(
         json.dumps(model_spec, ensure_ascii=False, indent=2, default=str), encoding="utf-8"
@@ -335,14 +399,10 @@ def main(config: DictConfig) -> None:
     }
     if all("test" in result for result in results):
         summary["mean_test"] = {
-            key: float(
-                np.nanmean([result["test"]["regression"][key] for result in results])
-            )
+            key: float(np.nanmean([result["test"]["regression"][key] for result in results]))
             for key in ("r2", "pcc", "scc", "rmse")
         } | {
-            key: float(
-                np.nanmean([result["test"]["classification"][key] for result in results])
-            )
+            key: float(np.nanmean([result["test"]["classification"][key] for result in results]))
             for key in ("auroc", "auprc", "ece")
         }
     (output_dir / "summary.json").write_text(

@@ -293,12 +293,45 @@ class TeacherPairDataset(_BASE):  # type: ignore[misc]
         self.pairs = self.all_pairs.loc[keep].reset_index(drop=True)
         self.split_label = self.split_label[keep]
 
-        self.y = sensitivity_labels(self.pairs, self.fit_stats.label_scaler)
-        y_cls, cls_mask = sensitivity_class(self.pairs, self.fit_stats.label_scaler)
+        # LDO/scaffold 的 val/test 药物不在 fold 内 label_scaler 中。若直接沿用
+        # 逐药 scaler，这些 pair 会得到 y=0 且 label_mask=False，导致无法早停/评估。
+        # 这里用训练 fold 的全局 mean/std/median 做 fallback：对单个药物而言仍是
+        # 单调变换，逐药 SCC/PCC 不受影响；且只使用 train 标签，不泄漏 val/test。
+        train_labels = self.pairs.loc[
+            self.split_label == "train", "ln_ic50"
+        ].to_numpy(dtype=float)
+        train_labels = train_labels[np.isfinite(train_labels)]
+        if train_labels.size == 0:
+            raise ValueError("训练 fold 没有可用标签，无法建立未知药物 fallback")
+        fallback_mean = float(np.mean(train_labels))
+        fallback_std = (
+            float(np.std(train_labels, ddof=1)) if train_labels.size > 1 else 1.0
+        )
+        fallback_median = float(np.median(train_labels))
+        self.label_fallback = {
+            "mean": fallback_mean,
+            "std": fallback_std,
+            "median": fallback_median,
+            "n_train_labels": int(train_labels.size),
+        }
+        self.y = sensitivity_labels(
+            self.pairs,
+            self.fit_stats.label_scaler,
+            fallback=(fallback_mean, fallback_std),
+        )
+        y_cls, cls_mask = sensitivity_class(
+            self.pairs,
+            self.fit_stats.label_scaler,
+            fallback_median=fallback_median,
+        )
         self.y_cls = y_cls
         self.cls_mask = cls_mask
-        labeled = set(self.fit_stats.label_scaler["compound_uid"])
-        self.label_mask = self.pairs["compound_uid"].isin(labeled).to_numpy(dtype=bool)
+        self.known_compound_mask = self.pairs["compound_uid"].isin(
+            set(self.fit_stats.label_scaler["compound_uid"])
+        ).to_numpy(dtype=bool)
+        self.label_mask = np.isfinite(
+            self.pairs["ln_ic50"].to_numpy(dtype=float)
+        )
         self.cell_idx = self.pairs["cell_line_uid"].map(self.cell_index).to_numpy(dtype=np.int64)
         self.drug_idx = self.pairs["compound_uid"].map(self.drug_index).to_numpy(dtype=np.int64)
 

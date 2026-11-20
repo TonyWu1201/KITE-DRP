@@ -287,6 +287,7 @@ def collate_pairs(
         label_mask=torch.from_numpy(base.label_mask[rows]),
         row_index=torch.from_numpy(rows),
         drug_idx=torch.from_numpy(drug_idx),
+        cell_idx=torch.from_numpy(cell_idx),
         ge_mask=torch.from_numpy(tensors.cell_ge_mask[cell_idx]),
         mu_mask=torch.from_numpy(tensors.cell_mu_mask[cell_idx]),
         neighbor_ge=(

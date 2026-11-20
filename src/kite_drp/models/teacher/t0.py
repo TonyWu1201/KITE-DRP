@@ -55,13 +55,16 @@ class TargetGeneEncoder(nn.Module):
         n_heads: int = 4,
         dropout: float = 0.1,
         gene_embedding: nn.Embedding | None = None,
+        use_gene_table: bool = True,
     ) -> None:
         super().__init__()
-        self.gene_embedding = (
-            gene_embedding
-            if gene_embedding is not None
-            else nn.Embedding(n_genes, gene_emb_dim)
-        )
+        if gene_embedding is not None:
+            self.gene_embedding = gene_embedding
+        elif use_gene_table:
+            self.gene_embedding = nn.Embedding(n_genes, gene_emb_dim)
+        else:
+            # T1：由外部图基因嵌入提供（forward(gene_embedding=...)）。
+            self.gene_embedding = None
         self.gene_proj = nn.Linear(gene_emb_dim, d_model)
         self.value_proj = nn.Linear(n_values, d_model)
         self.type_embedding = nn.Parameter(torch.zeros(d_model))
@@ -85,15 +88,33 @@ class TargetGeneEncoder(nn.Module):
         else:
             self.encoder = None
 
-    def forward(self, ids: Tensor, values: Tensor, mask: Tensor) -> tuple[Tensor, Tensor]:
-        tokens = (
-            self.gene_proj(self.gene_embedding(ids))
-            + self.value_proj(values)
-            + self.type_embedding
-        )
+    def forward(
+        self,
+        ids: Tensor,
+        values: Tensor,
+        mask: Tensor,
+        gene_embedding: nn.Embedding | Tensor | None = None,
+    ) -> tuple[Tensor, Tensor]:
+        table = gene_embedding if gene_embedding is not None else self.gene_embedding
+        if table is None:
+            raise ValueError("TargetGeneEncoder 未提供 gene_embedding")
+        embedded = table(ids) if callable(table) else table[ids]
+        tokens = self.gene_proj(embedded) + self.value_proj(values) + self.type_embedding
         tokens = self.dropout(self.norm(tokens))
         if self.encoder is not None:
-            tokens = self.encoder(tokens, src_key_padding_mask=~mask)
+            # 无靶点药物（LDO 中约 17%）会得到全 False 的 mask；直接喂给
+            # TransformerEncoder 会让全 -inf 的 attention 产生 NaN。
+            valid_rows = mask.any(dim=1)
+            if bool(valid_rows.all()):
+                tokens = self.encoder(tokens, src_key_padding_mask=~mask)
+            else:
+                encoded = tokens.new_zeros(tokens.shape)
+                if bool(valid_rows.any()):
+                    encoded[valid_rows] = self.encoder(
+                        tokens[valid_rows],
+                        src_key_padding_mask=~mask[valid_rows],
+                    )
+                tokens = encoded
         pooled = self.pool(tokens, mask)
         return pooled, mask.any(dim=1)
 
@@ -130,9 +151,7 @@ class PathwayTokenEncoder(nn.Module):
             self.cls_proj = cls_proj
         else:
             self.cls_proj = nn.Linear(pathway_dim, d_model)
-        self.cls_token = (
-            None if use_cls_proj else nn.Parameter(torch.zeros(1, d_model))
-        )
+        self.cls_token = None if use_cls_proj else nn.Parameter(torch.zeros(1, d_model))
         self.type_embedding = nn.Parameter(torch.zeros(d_model))
         self.norm = nn.LayerNorm(d_model)
         self.dropout = nn.Dropout(dropout)
@@ -200,6 +219,8 @@ class T0Teacher(nn.Module):
         target_branch: bool = False,
         target_gene_layers: int = 1,
         target_n_values: int = 0,
+        use_gene_table: bool = True,
+        use_target_table: bool = True,
         modalities: list[str] | tuple[str, ...] | None = None,
     ) -> None:
         super().__init__()
@@ -231,9 +252,7 @@ class T0Teacher(nn.Module):
         if cls_proj_mode not in {"full", "shared", "lowrank", "none"}:
             raise KeyError(f"未知 cls_proj_mode：{cls_proj_mode}")
         self.cls_proj_mode = "none" if not use_cls_proj else str(cls_proj_mode)
-        shared_embedding = (
-            nn.Embedding(pathway_dim, d_model) if self.shared_pathway else None
-        )
+        shared_embedding = nn.Embedding(pathway_dim, d_model) if self.shared_pathway else None
         shared_cls_proj: nn.Module | None = None
         if self.cls_proj_mode == "shared":
             shared_cls_proj = nn.Linear(pathway_dim, d_model)
@@ -246,9 +265,7 @@ class T0Teacher(nn.Module):
         encoders: list[nn.Module] = []
         for _ in self.modalities:
             modality_proj = (
-                nn.Linear(d_model, d_model, bias=False)
-                if self.shared_pathway_proj
-                else None
+                nn.Linear(d_model, d_model, bias=False) if self.shared_pathway_proj else None
             )
             encoders.append(
                 PathwayTokenEncoder(
@@ -270,7 +287,9 @@ class T0Teacher(nn.Module):
         )
         self.missing_cnv = nn.Parameter(torch.zeros(1, 1, d_model))
         gene_embedding = (
-            nn.Embedding(n_target_genes, target_embed_dim) if self.target_branch else None
+            nn.Embedding(n_target_genes, target_embed_dim)
+            if (self.target_branch and use_gene_table)
+            else None
         )
         self.drug = DrugEncoder(
             morgan_dim=morgan_dim,
@@ -283,6 +302,7 @@ class T0Teacher(nn.Module):
             use_targets=use_targets,
             target_embed_dim=target_embed_dim,
             target_embedding=gene_embedding,
+            use_target_table=use_target_table,
         )
         self.target = (
             TargetGeneEncoder(
@@ -294,14 +314,13 @@ class T0Teacher(nn.Module):
                 n_heads=n_heads,
                 dropout=dropout,
                 gene_embedding=gene_embedding,
+                use_gene_table=use_gene_table,
             )
             if self.target_branch
             else None
         )
         # 初始为 0，让 target branch 从“无贡献”开始学，避免随机基因嵌入早期扰动。
-        self.target_gate = (
-            nn.Parameter(torch.zeros(1)) if self.target_branch else None
-        )
+        self.target_gate = nn.Parameter(torch.zeros(1)) if self.target_branch else None
         self.cross_attn = nn.MultiheadAttention(d_model, n_heads, dropout=dropout, batch_first=True)
         self.cross_norm = nn.LayerNorm(d_model)
         self.dropout = nn.Dropout(dropout)
@@ -369,7 +388,13 @@ class T0Teacher(nn.Module):
             return torch.ones(batch_size, dtype=torch.bool, device=device)
         return mask.view(-1).to(device=device, dtype=torch.bool)
 
-    def forward(self, batch: TeacherBatch) -> TeacherOutput:
+    def forward(
+        self,
+        batch: TeacherBatch,
+        *,
+        gene_embedding: nn.Embedding | Tensor | None = None,
+        drug_target_vec: Tensor | None = None,
+    ) -> TeacherOutput:
         inputs = {"GE": batch.ge, "MU": batch.mu, "CNV": batch.cnv}
         omics: list[Tensor] = []
         omics_masks: list[Tensor] = []
@@ -451,14 +476,13 @@ class T0Teacher(nn.Module):
                     batch.target_gene_ids,
                     batch.target_gene_values,
                     batch.target_gene_mask,
+                    gene_embedding=gene_embedding,
                 )
                 assert self.target_gate is not None
                 target_token = target_token * torch.tanh(self.target_gate)
             else:
                 target_token = omics[0].new_zeros(batch_size, self.d_model)
-                target_valid = torch.zeros(
-                    batch_size, dtype=torch.bool, device=omics[0].device
-                )
+                target_valid = torch.zeros(batch_size, dtype=torch.bool, device=omics[0].device)
             omics.append(target_token.unsqueeze(1))
             omics_masks.append(target_valid.unsqueeze(1))
             cls_parts.append(target_token)
@@ -473,7 +497,7 @@ class T0Teacher(nn.Module):
             token_mask = token_mask.clone()
             token_mask[~token_mask.any(dim=1), 0] = True
 
-        drug0 = self.drug(batch)
+        drug0 = self.drug(batch, target_vec=drug_target_vec)
         if self.masked_modalities:
             cross, attention = self.cross_attn(
                 query=drug0.unsqueeze(1),

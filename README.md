@@ -20,7 +20,7 @@
 | 端侧部署脚手架：本机 Web 服务（前端页面 + HTTP API + 后端排队，离线合规） | ✅ 可运行（demo 模式，待接真实 ONNX 模型） |
 | 数据管线（下载/预处理/split/fit-stats/自包含 processed） | ✅ G0 完成 |
 | 教师 B0 / T0（训练、指标、H3CDR 式相似性、预检） | ✅ v0.1（LCO 5 折，单 seed；模型卡见 `docs/model_cards/`） |
-| 教师 T1 / 学生 / 蒸馏 / 端侧导出 | 🚧 待实现 |
+| 教师 T1 / 学生 / 蒸馏 / 端侧导出 | 🚧 T1 v0.1 已实现（图构建/模型/快速筛选）；学生/蒸馏待实现 |
 
 本轮结构与工程配置的实施记录见
 [`plans&notes/2026-11-15_仓库结构与工程配置说明.md`](<plans&notes/2026-11-15_仓库结构与工程配置说明.md>)；
@@ -212,6 +212,13 @@ uv run uvicorn app.main:app --host 127.0.0.1 --port 8000
   uv run python -m kite_drp.train.teacher_train teacher=t0 teacher.use_neighbor=false
   # 批量消融（E2 模态 / E-drug / E-sim；默认折 0+2、10 epochs、2 workers）
   uv run python scripts/run_ablations.py --suite all --folds 0,2 --epochs 10
+  # T1 图教师：先用同 fold P1 checkpoint 初始化（T1 起点 = P1）
+  uv run python -m kite_drp.train.teacher_train teacher=t1 split=ldo fold=0 \
+    teacher.init_from=experiments/<p1_run>
+  # T1 快速筛选（P1 基线 + T1 + 随机 PPI/DTI；3 折 × 2 seeds）
+  uv run python scripts/run_t1_quick.py --variants p1,t1,t1_random_ppi,t1_random_dti \
+    --split ldo --folds 0,1,2 --seeds 0,1 --epochs 20 \
+    --init-from experiments/p1_ldo_quick --out experiments/p1_ldo_quick
   # 学生 A 档 + 输出软标签蒸馏（待实现）
   uv run python -m kite_drp.train.student_train --config-name config student=a kd=default
   ```

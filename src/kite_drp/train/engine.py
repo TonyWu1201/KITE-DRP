@@ -16,7 +16,7 @@ import torch.nn.functional as F
 from torch import nn
 from torch.utils.data import DataLoader
 
-from kite_drp.eval.metrics import evaluate_predictions
+from kite_drp.eval.metrics import evaluate_predictions, regression_metrics
 from kite_drp.models.teacher.common import TeacherBatch, TeacherOutput
 from kite_drp.train.losses import pairwise_rank_loss
 
@@ -60,12 +60,28 @@ def _loss(
     else:
         regression = regression.mean()
     mask = batch.cls_mask.to(model_output.logits.dtype)
-    bce = F.binary_cross_entropy_with_logits(
-        model_output.logits, batch.y_cls, reduction="none"
-    )
+    bce = F.binary_cross_entropy_with_logits(model_output.logits, batch.y_cls, reduction="none")
     classification = (bce * mask).sum() / mask.sum().clamp_min(1.0)
     weight = float(config.get("cls_weight", 0.5))
     loss = regression + weight * classification
+    graph_weight = float(config.get("graph_weight", 0.0))
+    if graph_weight > 0 and "y_graph" in model_output.aux:
+        graph_reg = F.huber_loss(
+            model_output.aux["y_graph"], batch.y, delta=delta, reduction="none"
+        )
+        if batch.label_mask is not None:
+            mask_reg = batch.label_mask.to(graph_reg.dtype)
+            graph_reg = (graph_reg * mask_reg).sum() / mask_reg.sum().clamp_min(1.0)
+        else:
+            graph_reg = graph_reg.mean()
+        loss = loss + graph_weight * graph_reg
+        graph_cls_weight = float(config.get("graph_cls_weight", 0.0))
+        if graph_cls_weight > 0 and "logits_graph" in model_output.aux:
+            graph_bce = F.binary_cross_entropy_with_logits(
+                model_output.aux["logits_graph"], batch.y_cls, reduction="none"
+            )
+            graph_bce = (graph_bce * mask).sum() / mask.sum().clamp_min(1.0)
+            loss = loss + graph_cls_weight * graph_bce
     if rank_weight > 0 and batch.drug_idx is not None:
         rank_mask = batch.label_mask if batch.label_mask is not None else None
         ranking = pairwise_rank_loss(
@@ -91,9 +107,13 @@ def evaluate(
 ) -> tuple[dict[str, Any], pd.DataFrame]:
     model.eval()
     predictions = []
+    graph_predictions: list[np.ndarray] = []
     for batch in loader:
         batch = move_batch(batch, device)
         output = model(batch)
+        graph_y = output.aux.get("y_graph")
+        if graph_y is not None:
+            graph_predictions.append(graph_y.float().cpu().numpy())
         predictions.append(
             pd.DataFrame(
                 {
@@ -117,6 +137,14 @@ def evaluate(
         frame["cell_line_uid"] = base.pairs.iloc[rows]["cell_line_uid"].to_numpy()
         frame["compound_uid"] = base.pairs.iloc[rows]["compound_uid"].to_numpy()
     metrics = evaluate_predictions(frame)
+    if graph_predictions:
+        graph_pred = np.concatenate(graph_predictions)
+        frame["y_graph_pred"] = graph_pred
+        mask = frame["label_mask"].to_numpy(dtype=bool)
+        metrics["graph_regression"] = regression_metrics(
+            frame["y_true"].to_numpy()[mask],
+            graph_pred[mask],
+        )
     return metrics, frame
 
 
@@ -129,13 +157,9 @@ def _warmup_cosine(step: int, *, warmup: int, total: int) -> float:
 
 def _update_ema(ema_model: nn.Module, model: nn.Module, decay: float) -> None:
     with torch.no_grad():
-        for ema_param, param in zip(
-            ema_model.parameters(), model.parameters(), strict=False
-        ):
+        for ema_param, param in zip(ema_model.parameters(), model.parameters(), strict=False):
             ema_param.mul_(decay).add_(param.detach(), alpha=1.0 - decay)
-        for ema_buffer, buffer in zip(
-            ema_model.buffers(), model.buffers(), strict=False
-        ):
+        for ema_buffer, buffer in zip(ema_model.buffers(), model.buffers(), strict=False):
             ema_buffer.copy_(buffer)
 
 
@@ -160,18 +184,40 @@ def fit_teacher(
     grad_clip = float(config.get("grad_clip", 1.0))
     amp_enabled = bool(config.get("amp", True)) and device.type == "cuda"
 
-    optimizer = torch.optim.AdamW(
-        model.parameters(),
-        lr=float(config.get("lr", 5e-4)),
-        weight_decay=float(config.get("weight_decay", 1e-4)),
-    )
+    lr = float(config.get("lr", 5e-4))
+    weight_decay = float(config.get("weight_decay", 1e-4))
+    backbone_params = [
+        parameter for name, parameter in model.named_parameters() if name.startswith("backbone.")
+    ]
+    other_params = [
+        parameter
+        for name, parameter in model.named_parameters()
+        if not name.startswith("backbone.")
+    ]
+    p1_lr_mult = float(config.get("p1_lr_mult", 1.0))
+    if backbone_params and p1_lr_mult != 1.0:
+        # T1：P1 预训练权重用小学习率，图分支用主学习率，避免把 P1 推离最优点。
+        optimizer = torch.optim.AdamW(
+            [
+                {"params": other_params, "lr": lr, "weight_decay": weight_decay},
+                {
+                    "params": backbone_params,
+                    "lr": lr * p1_lr_mult,
+                    "weight_decay": weight_decay,
+                },
+            ]
+        )
+    else:
+        optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=weight_decay)
+    freeze_epochs = max(int(config.get("freeze_p1_epochs", 0)), 0)
+    if freeze_epochs > 0 and backbone_params:
+        for parameter in backbone_params:
+            parameter.requires_grad_(False)
     total_steps = max(int(config.get("warmup_steps", 200)), 0) + epochs * len(train_loader)
     warmup = int(config.get("warmup_steps", 200))
     scheduler = torch.optim.lr_scheduler.LambdaLR(
         optimizer,
-        lr_lambda=lambda step: _warmup_cosine(
-            step, warmup=warmup, total=total_steps
-        ),
+        lr_lambda=lambda step: _warmup_cosine(step, warmup=warmup, total=total_steps),
     )
     scaler = torch.amp.GradScaler("cuda", enabled=amp_enabled)
     ema_decay = float(config.get("ema_decay", 0.0))
@@ -191,6 +237,9 @@ def fit_teacher(
     started = time.time()
 
     for epoch in range(epochs):
+        if freeze_epochs > 0 and epoch == freeze_epochs and backbone_params:
+            for parameter in backbone_params:
+                parameter.requires_grad_(True)
         model.train()
         if ema_model is not None:
             ema_model.eval()
@@ -208,9 +257,13 @@ def fit_teacher(
             if grad_clip > 0:
                 scaler.unscale_(optimizer)
                 torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
+            scale_before = scaler.get_scale()
             scaler.step(optimizer)
             scaler.update()
-            scheduler.step()
+            # AMP 溢出时 scaler 会跳过 optimizer.step；此时不应推进 scheduler，
+            # 否则会出现 “lr_scheduler.step() before optimizer.step()” 警告。
+            if scaler.get_scale() >= scale_before:
+                scheduler.step()
             if ema_model is not None:
                 _update_ema(ema_model, model, ema_decay)
             epoch_loss += float(loss.detach().cpu())
@@ -218,11 +271,17 @@ def fit_teacher(
 
         eval_model = ema_model if ema_model is not None else model
         val_metrics, _ = evaluate(eval_model, val_loader, device=device, base=base)
+        gates = {
+            name: float(torch.tanh(getattr(eval_model, name)).detach())
+            for name in ("gene_gate", "cell_gate", "drug_gate", "graph_pred_gate")
+            if hasattr(eval_model, name)
+        }
         record = {
             "epoch": epoch,
             "train_loss": epoch_loss / max(len(train_loader), 1),
             "lr": float(optimizer.param_groups[0]["lr"]),
             "rank_weight": rank_weight,
+            "gates": gates,
             "val": val_metrics,
         }
         history.append(record)
@@ -237,14 +296,19 @@ def fit_teacher(
                     "rank_weight": round(rank_weight, 4),
                     "val_r2": round(val_metrics["regression"]["r2"], 4),
                     "val_scc": round(val_metrics["regression"]["scc"], 4),
+                    "val_graph_scc": round(
+                        val_metrics.get("graph_regression", {}).get("scc", float("nan")),
+                        4,
+                    ),
                     "val_auroc": round(val_metrics["classification"]["auroc"], 4),
+                    "gates": {key: round(value, 4) for key, value in gates.items()},
                 },
                 ensure_ascii=False,
             ),
             flush=True,
         )
-        improved = (value > best_value + 1e-6) if monitor_mode == "max" else (
-            value < best_value - 1e-6
+        improved = (
+            (value > best_value + 1e-6) if monitor_mode == "max" else (value < best_value - 1e-6)
         )
         if improved:
             best_value = value
@@ -274,6 +338,8 @@ def fit_teacher(
         "history": history,
         "ema_decay": ema_decay,
         "rank_weight": base_rank_weight,
+        "p1_lr_mult": p1_lr_mult,
+        "freeze_p1_epochs": freeze_epochs,
     }
     (run_dir / "history.json").write_text(
         json.dumps(history, ensure_ascii=False, indent=2, default=float), encoding="utf-8"
@@ -298,6 +364,8 @@ def _monitor_value(metrics: dict[str, Any], monitor: str) -> float:
         return float(metrics["classification"]["auroc"])
     if monitor == "val_pcc":
         return float(metrics["regression"]["pcc"])
+    if monitor == "val_per_drug_scc":
+        return float(metrics.get("per_drug", {}).get("scc_mean", float("nan")))
     raise KeyError(f"未知 monitor：{monitor}")
 
 
