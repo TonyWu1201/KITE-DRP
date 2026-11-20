@@ -96,3 +96,19 @@ LDO batch 均验证，max |Δy| ~1e-7）。图必须先“挣出”增益。
 - 73/286 个药物无靶点（OT+GDSC clean DTI）；T1 对它们退化为 Morgan + 图上下文，需按“有无 DTI”分组报告；
 - 2026-11-20 已重建 clean DTI：GDSC `TARGET` + Open Targets MoA（CC0），DGIdb 不再参与；旧 T1 权重仍对应旧 DTI，复现/对比时需固定版本；
 - **科研原型，不用于临床诊断或治疗决策。**
+
+## 7. 2026-11-20 新 DTI 对照（快速验证）
+
+DTI 从旧 4,395 边 / 237 个药物切换到 `dti.parquet` 的 640 边 / 213 个药物
+（301 个靶点基因）后，旧 T1 权重和旧 P1 基线都不再可比。当前在
+`feat/t1-local-graph` 分支上用少折、单 seed 重跑：
+
+- P1：LDO fold 0–1，seed 0，12 epochs，per-drug SCC **0.6245**；
+- T1 legacy：LDO fold 0，seed 0，新 DTI + 新 P1 初始化，per-drug SCC **0.6397**
+  （相对 P1 fold0 **+0.0169**；OT 子集 +0.0372、GDSC-only +0.0043、无 DTI +0.0037）；
+- T1-local：见 [`teacher-t1-local.md`](teacher-t1-local.md)。
+
+T1 legacy 只作为“旧全局图在新 DTI 下是否还比 P1 好”的对照，不用于图拓扑
+归因；旧 random-DTI 对照因 P1 target 分支仍读真实靶点，不能解释为新 DTI
+的拓扑证据。
+

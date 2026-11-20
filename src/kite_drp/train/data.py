@@ -317,7 +317,7 @@ def _local_graph_batch(
         edge_index = np.zeros((2, 0), dtype=np.int64)
 
     coverage = np.asarray(local_arrays["coverage"], dtype=bool)[drug_idx]
-    has_neighbor = (edge_ptr[drug_idx + 1] > edge_ptr[drug_idx]).astype(bool)
+    has_neighbor = np.asarray(local_arrays["n_neighbors"], dtype=np.int64)[drug_idx] > 0
     return {
         "local_node_values": torch.from_numpy(values),
         "local_node_root": torch.from_numpy(node_root),

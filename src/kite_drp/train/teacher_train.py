@@ -302,6 +302,7 @@ def _run_fold(
         ),
     )
     params = count_parameters(model)
+    params_total = count_parameters(model, trainable_only=False)
     target = int(config["teacher"].get("params_target", 5_000_000))
     variant = str(config["teacher"].get("variant", config["teacher"]["name"]))
     print(
@@ -311,6 +312,7 @@ def _run_fold(
                 "fold": fold,
                 "split": split_id,
                 "params": params,
+                "params_total": params_total,
                 "params_target": target,
                 "train_pairs": int(base.indices("train").size),
                 "val_pairs": int(base.indices("val").size),
@@ -358,6 +360,7 @@ def _run_fold(
         fold=fold,
     )
     result["params"] = params
+    result["params_total"] = params_total
     result["similarity"] = similarity_meta
     result["train_pairs"] = int(base.indices("train").size)
     result["val_pairs"] = int(base.indices("val").size)
@@ -371,6 +374,8 @@ def _run_fold(
         )
     model_spec = {
         "model_class": str(config["teacher"]["name"]),
+        "params_trainable": params,
+        "params_total": params_total,
         "pathway_dim": int(features.ge.shape[1]),
         "morgan_dim": int(drugs.morgan.shape[1]),
         "n_target_genes": int(drugs.target_dim),
