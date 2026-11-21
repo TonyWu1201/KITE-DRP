@@ -57,6 +57,41 @@ def test_graph_loss_ignores_uncovered_samples() -> None:
     torch.testing.assert_close(_loss(covered, batch, config), _loss(extreme, batch, config))
 
 
+def test_tower_loss_uses_y_t2_and_label_mask() -> None:
+    batch = _batch()
+    batch.label_mask = torch.tensor([True, True, False])
+    batch.y = torch.tensor([0.0, 1.0, 100.0])
+    config = {
+        "graph_weight": 0.0,
+        "graph_cls_weight": 0.0,
+        "cls_weight": 0.0,
+        "tower_weight": 1.0,
+        "tower_cls_weight": 0.0,
+    }
+    zeros = torch.zeros(3, 4)
+    output = TeacherOutput(
+        y_hat=torch.zeros(3),
+        logits=torch.zeros(3),
+        z_pair=zeros,
+        z_cell=zeros,
+        z_drug=zeros,
+        aux={"y_t2": torch.tensor([0.0, 0.0, 1e6])},
+    )
+    without_tower = TeacherOutput(
+        y_hat=torch.zeros(3),
+        logits=torch.zeros(3),
+        z_pair=zeros,
+        z_cell=zeros,
+        z_drug=zeros,
+    )
+    base_config = {**config, "tower_weight": 0.0}
+    # 第 2 行被 label_mask 排除；前两行的 tower Huber 损失 = (0 + 0.5) / 2。
+    torch.testing.assert_close(
+        _loss(output, batch, config) - _loss(without_tower, batch, base_config),
+        torch.tensor(0.25),
+    )
+
+
 def test_center_loss_ignores_uncovered_samples() -> None:
     batch = _batch()
     config = {

@@ -16,7 +16,7 @@ import torch.nn.functional as F
 from torch import nn
 from torch.utils.data import DataLoader
 
-from kite_drp.eval.metrics import evaluate_predictions, regression_metrics
+from kite_drp.eval.metrics import evaluate_predictions, per_drug_metrics, regression_metrics
 from kite_drp.models.teacher.common import TeacherBatch, TeacherOutput
 from kite_drp.train.losses import pairwise_rank_loss
 
@@ -89,6 +89,26 @@ def _loss(
             graph_mask = mask_reg * mask.to(graph_bce.dtype)
             graph_bce = (graph_bce * graph_mask).sum() / graph_mask.sum().clamp_min(1.0)
             loss = loss + graph_cls_weight * graph_bce
+    tower_weight = float(config.get("tower_weight", 0.0))
+    if tower_weight > 0 and "y_t2" in model_output.aux:
+        tower_reg = F.huber_loss(
+            model_output.aux["y_t2"], batch.y, delta=delta, reduction="none"
+        )
+        tower_mask = (
+            batch.label_mask.to(tower_reg.dtype)
+            if batch.label_mask is not None
+            else torch.ones_like(tower_reg)
+        )
+        tower_reg = (tower_reg * tower_mask).sum() / tower_mask.sum().clamp_min(1.0)
+        loss = loss + tower_weight * tower_reg
+        tower_cls_weight = float(config.get("tower_cls_weight", 0.0))
+        if tower_cls_weight > 0 and "logits_t2" in model_output.aux:
+            tower_bce = F.binary_cross_entropy_with_logits(
+                model_output.aux["logits_t2"], batch.y_cls, reduction="none"
+            )
+            tower_cls_mask = tower_mask * mask.to(tower_bce.dtype)
+            tower_bce = (tower_bce * tower_cls_mask).sum() / tower_cls_mask.sum().clamp_min(1.0)
+            loss = loss + tower_cls_weight * tower_bce
     if rank_weight > 0 and batch.drug_idx is not None:
         rank_mask = batch.label_mask if batch.label_mask is not None else None
         ranking = pairwise_rank_loss(
@@ -145,12 +165,29 @@ def evaluate(
     model.eval()
     predictions = []
     graph_predictions: list[np.ndarray] = []
+    p1_predictions: list[np.ndarray] = []
+    t2_predictions: list[np.ndarray] = []
+    alpha_values: list[np.ndarray] = []
+    coverage_values: list[np.ndarray] = []
     for batch in loader:
         batch = move_batch(batch, device)
         output = model(batch)
         graph_y = output.aux.get("y_graph")
         if graph_y is not None:
             graph_predictions.append(graph_y.float().cpu().numpy())
+        if "y_p1" in output.aux:
+            p1_predictions.append(output.aux["y_p1"].float().cpu().numpy())
+        if "y_t2" in output.aux:
+            t2_predictions.append(output.aux["y_t2"].float().cpu().numpy())
+        alpha = output.aux.get("t2_alpha")
+        if alpha is not None:
+            if isinstance(alpha, torch.Tensor):
+                alpha_values.append(alpha.detach().float().cpu().numpy().reshape(-1))
+            else:
+                alpha_values.append(np.full(len(batch.y), float(alpha), dtype=np.float32))
+        coverage = output.aux.get("ppi_coverage")
+        if coverage is not None:
+            coverage_values.append(coverage.detach().cpu().numpy().astype(bool))
         predictions.append(
             pd.DataFrame(
                 {
@@ -169,18 +206,36 @@ def evaluate(
             )
         )
     frame = pd.concat(predictions, ignore_index=True)
+    if p1_predictions:
+        frame["y_p1_pred"] = np.concatenate(p1_predictions)
+    if t2_predictions:
+        frame["y_t2_pred"] = np.concatenate(t2_predictions)
+    if alpha_values:
+        frame["t2_alpha"] = np.concatenate(alpha_values)
+    if coverage_values:
+        frame["ppi_coverage"] = np.concatenate(coverage_values)
     if base is not None:
         rows = frame["row_index"].to_numpy()
         frame["cell_line_uid"] = base.pairs.iloc[rows]["cell_line_uid"].to_numpy()
         frame["compound_uid"] = base.pairs.iloc[rows]["compound_uid"].to_numpy()
     metrics = evaluate_predictions(frame)
+    mask = frame["label_mask"].to_numpy(dtype=bool)
     if graph_predictions:
         graph_pred = np.concatenate(graph_predictions)
         frame["y_graph_pred"] = graph_pred
-        mask = frame["label_mask"].to_numpy(dtype=bool)
         metrics["graph_regression"] = regression_metrics(
             frame["y_true"].to_numpy()[mask],
             graph_pred[mask],
+        )
+    for column, key in (("y_p1_pred", "p1"), ("y_t2_pred", "t2")):
+        if column not in frame.columns:
+            continue
+        metrics[f"{key}_regression"] = regression_metrics(
+            frame["y_true"].to_numpy()[mask],
+            frame[column].to_numpy()[mask],
+        )
+        metrics[f"{key}_per_drug"] = per_drug_metrics(
+            frame.assign(y_pred=frame[column])
         )
     return metrics, frame
 
@@ -310,7 +365,14 @@ def fit_teacher(
         val_metrics, _ = evaluate(eval_model, val_loader, device=device, base=base)
         gates = {
             name: float(torch.tanh(getattr(eval_model, name)).detach())
-            for name in ("gene_gate", "cell_gate", "drug_gate", "graph_pred_gate")
+            for name in (
+                "gene_gate",
+                "cell_gate",
+                "drug_gate",
+                "graph_pred_gate",
+                "alpha",
+                "context_scale",
+            )
             if hasattr(eval_model, name)
         }
         graph_alpha = getattr(eval_model, "graph_alpha", None)

@@ -394,7 +394,13 @@ class T0Teacher(nn.Module):
         *,
         gene_embedding: nn.Embedding | Tensor | None = None,
         drug_target_vec: Tensor | None = None,
+        pair_context: Tensor | None = None,
     ) -> TeacherOutput:
+        """``pair_context`` 是可选的 (B, d_model) 残差，用于 T2 的 DTI/PPI 上下文。
+
+        只在 ``readout=sum/hadamard/hybrid`` 下支持；``bilinear`` 的维度契约不同，
+        传入会直接报错，避免静默改变读出语义。
+        """
         inputs = {"GE": batch.ge, "MU": batch.mu, "CNV": batch.cnv}
         omics: list[Tensor] = []
         omics_masks: list[Tensor] = []
@@ -558,16 +564,22 @@ class T0Teacher(nn.Module):
             z_cell = z_cell + self.dense_cell(cls_tokens)
 
         if self.readout == "bilinear":
+            if pair_context is not None:
+                raise ValueError("readout=bilinear 不支持 pair_context；请用 sum/hadamard/hybrid")
             interaction = z_cell * z_drug
             y_hat = interaction.sum(dim=-1) / math.sqrt(self.d_model) + self.bias
             z_pair = torch.cat([interaction, z_cell, z_drug], dim=-1)
             _, logits = self.heads(z_pair)
         elif self.readout == "hadamard":
             z_pair = z_cell * z_drug
+            if pair_context is not None:
+                z_pair = z_pair + pair_context
             y_hat, logits = self.heads(z_pair)
         elif self.readout == "hybrid":
             interaction = z_cell * z_drug
             z_pair = self.pair_proj(torch.cat([z_cell, z_drug, interaction], dim=-1))
+            if pair_context is not None:
+                z_pair = z_pair + pair_context
             y_head, logits = self.heads(z_pair)
             y_hat = (
                 self.bilinear_scale * interaction.sum(dim=-1) / math.sqrt(self.d_model)
@@ -576,6 +588,8 @@ class T0Teacher(nn.Module):
             )
         else:
             z_pair = z_drug + z_cell
+            if pair_context is not None:
+                z_pair = z_pair + pair_context
             y_hat, logits = self.heads(z_pair)
         aux = {"attention_tokens": tokens, "omics_mask": token_mask}
         if attention is not None:

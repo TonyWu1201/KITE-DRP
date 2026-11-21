@@ -51,6 +51,13 @@ class TeacherBatch:
     local_graph_coverage: Tensor | None = None  # (B,) 药是否有合规 DTI
     local_graph_observed: Tensor | None = None  # (B,) 该细胞至少观测到一个根
     local_graph_has_neighbor: Tensor | None = None  # (B,) 该药局部图是否有边
+    # T2：无图 DTI/PPI 固定特征（不建图、不做消息传递）。
+    ppi_summary: Tensor | None = None  # (B, F_summary)：根/邻居集合统计
+    ppi_rwr: Tensor | None = None  # (B, F_rwr)：RWR 加权组学
+    ppi_target_pathway: Tensor | None = None  # (B, P)：靶点通路 profile
+    ppi_neighbor_pathway: Tensor | None = None  # (B, P)：邻居通路 profile
+    ppi_coverage: Tensor | None = None  # (B,) 该药是否有合规 DTI
+    ppi_tier: Tensor | None = None  # (B,) 0=none, 1=gdsc_only, 2=ot
 
 
 @dataclass

@@ -345,6 +345,7 @@ def collate_pairs(
     drugs: DrugFeatureSet,
     use_gin: bool = False,
     local_graphs: Any | None = None,
+    ppi_features: Any | None = None,
 ) -> TeacherBatch:
     rows = np.asarray(indices, dtype=np.int64)
     cell_idx = base.cell_idx[rows]
@@ -433,6 +434,25 @@ def collate_pairs(
             drug_idx=drug_idx,
         ).items():
             setattr(batch, key, value)
+    if ppi_features is not None:
+        batch.ppi_summary = torch.from_numpy(
+            np.asarray(ppi_features.summary)[drug_idx, cell_idx].astype(np.float32, copy=False)
+        )
+        batch.ppi_rwr = torch.from_numpy(
+            np.asarray(ppi_features.rwr)[drug_idx, cell_idx].astype(np.float32, copy=False)
+        )
+        batch.ppi_target_pathway = torch.from_numpy(
+            np.asarray(ppi_features.target_pathway)[drug_idx].astype(np.float32, copy=False)
+        )
+        batch.ppi_neighbor_pathway = torch.from_numpy(
+            np.asarray(ppi_features.neighbor_pathway)[drug_idx].astype(np.float32, copy=False)
+        )
+        batch.ppi_coverage = torch.from_numpy(
+            np.asarray(ppi_features.coverage)[drug_idx].astype(bool, copy=False)
+        )
+        batch.ppi_tier = torch.from_numpy(
+            np.asarray(ppi_features.tier)[drug_idx].astype(np.int64, copy=False)
+        )
     if use_gin:
         graph = _graph_batch(drug_idx, drugs)
         batch.graph_node_feat = graph.get("node_feat")  # type: ignore[assignment]
@@ -454,6 +474,7 @@ def make_loader(
     num_workers: int = 0,
     use_gin: bool = False,
     local_graphs: Any | None = None,
+    ppi_features: Any | None = None,
     seed: int = 0,
     group_by_drug: bool = False,
     drugs_per_batch: int = 8,
@@ -469,6 +490,7 @@ def make_loader(
             drugs=drugs,
             use_gin=use_gin,
             local_graphs=local_graphs,
+            ppi_features=ppi_features,
         )
 
     if group_by_drug:

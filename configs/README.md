@@ -11,7 +11,7 @@
 | `paths` | `paths/` | 仓库内相对路径（唯一路径来源） | §3.8、附录 B |
 | `data` | `data/` | 数据集、标签方向、教师/学生模态集合、组学/先验口径 | §3、§5.1 |
 | `split` | `split/` | P0–P4/LPO 划分协议 | §7.2 |
-| `teacher` | `teacher/` | B0/T0/T1 教师结构与规模 | §4 |
+| `teacher` | `teacher/` | B0/T0/T1/T2 教师结构与规模（T2 = 冻结 P1 + 无图第二塔 + DTI/PPI 固定特征） | §4 |
 | `similarity` | `similarity/` | H3CDR 式细胞相似性（fold-safe） | §4.4、E-sim |
 | `train` | `train/` | 优化器/早停/AMP 训练口径 | §6.3 |
 | `student` | `student/` | A/B/S-latent 学生结构与参数预算 | §5.4–5.5 |

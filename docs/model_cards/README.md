@@ -13,6 +13,7 @@
 | [`teacher-t0-ablations.md`](teacher-t0-ablations.md) | T0 的 E2/E-drug/E-sim 消融报告 | ✅ 筛选 + 5 折确认（单 seed） |
 | [`teacher-t1.md`](teacher-t1.md) | T1 图增强 P1 教师（主教师候选） | 🚧 v0.1（新 DTI 快筛完成；图拓扑归因阴性，增益来自第二塔/融合） |
 | [`teacher-t1-local.md`](teacher-t1-local.md) | T1-local：每药一跳局部图残差（新 DTI 下的图教师主线） | ⛔ v0.1（两轮快筛完成；阶段 1 未通过，归档为负结果） |
+| [`teacher-t2.md`](teacher-t2.md) | T2：冻结 P1 + 无图第二塔 + DTI/PPI 固定特征 | 🚧 v0.1（LDO fold0/1 快筛完成；第二塔稳定有效，PPI 增量不稳健） |
 | `student-a-int8.md` | A 档学生 + 动态 INT8（端侧交付） | 待蒸馏/QAT（M5） |
 | 待补 | B 档学生 / S-latent 极限档 | — |
 

@@ -1,0 +1,108 @@
+# @package teacher
+# T2：冻结 P1 + 独立第二塔 + 无图 DTI/PPI 上下文。
+#
+# 设计依据：旧 T1 的随机 PPI/DTI、去 cell-gene 边、1.5M MLP 头都不能解释
+# 增益；剩余成分是“第二套独立编码 + 预测级融合”。T2 因此不建图，
+# DTI/PPI 只以固定特征进入第二塔。
+name: t2
+variant: t2
+kind: dual_tower
+# ---- P1 backbone（冻结）----
+drug_encoder: morgan_targets
+use_morgan: true
+use_targets: true
+use_gin: false
+target_embed_dim: 16
+d_model: 256
+n_heads: 4
+n_layers: 2
+dropout: 0.1
+top_k: 64
+use_neighbor: true
+neighbor_source: auto
+modality_dropout: 0.15
+token_types: true
+rank_embedding: true
+cell_readout: attention
+masked_modalities: true
+cross_gate: true
+readout: sum
+use_dense_shortcut: false
+shared_pathway: false
+shared_pathway_proj: false
+use_cls_proj: true
+cls_proj_mode: lowrank
+cls_proj_rank: 64
+target_branch: true
+target_gene_layers: 1
+target_max_tokens: 64
+modalities: [GE, MU, CNV]
+params_target: 10_000_000
+# 同 split/fold 的 P1 run 目录（含 foldK/best.pt）或直接 .pt 路径。
+init_from: null
+
+# ---- 第二塔：刻意与 P1 不同，制造误差去相关 ----
+tower:
+  d_model: 192
+  hidden: 192
+  n_heads: 4
+  n_layers: 1
+  top_k: 32
+  dropout: 0.1
+  use_targets: true
+  use_morgan: true
+  use_neighbor: false
+  cell_readout: attention
+  readout: sum
+  masked_modalities: true
+  cross_gate: true
+  token_types: true
+  rank_embedding: true
+  use_cls_proj: true
+  cls_proj_mode: lowrank
+  cls_proj_rank: 32
+  target_branch: true
+  target_gene_layers: 1
+  target_embed_dim: 16
+  modalities: [GE, MU, CNV]
+
+# ---- 无图 DTI/PPI 特征 ----
+ppi:
+  enabled: true
+  use_summary: true
+  use_rwr: true
+  use_pathway: true
+  context_hidden: 64
+  ppi_min_score: 0.7
+  # ppi | pseudo
+  neighbor_mode: ppi
+  max_neighbors_per_target: 8
+  max_nodes_per_drug: 64
+  rwr_alpha: 0.5
+  rwr_steps: 10
+  rwr_min_score: 0.7
+  # none | permute_drugs | gaussian
+  random_control: none
+  seed: 20261120
+
+# ---- 融合与训练 ----
+t2:
+  fusion: global  # global | sample
+  alpha_init: 0.0
+  tower_weight: 0.3
+  dropout: 0.1
+
+train:
+  lr: 1.5e-4
+  weight_decay: 1.0e-3
+  rank_weight: 0.0
+  cls_weight: 0.5
+  group_by_drug: false
+  ema_decay: 0.0
+  min_epochs: 0
+  # P1 在 T2DualTeacher 内始终冻结；保留字段与旧配置兼容。
+  freeze_p1_epochs: 0
+  p1_lr_mult: 1.0
+  # 第二塔深监督：即使融合 gate 暂时为 0，第二塔也持续学习。
+  tower_weight: 0.3
+  tower_cls_weight: 0.2

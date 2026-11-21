@@ -24,6 +24,7 @@ from kite_drp.models.teacher.common import count_parameters
 from kite_drp.models.teacher.t0 import T0Teacher
 from kite_drp.models.teacher.t1 import T1Teacher
 from kite_drp.models.teacher.t1_local import T1LocalTeacher, T1MlpHeadTeacher
+from kite_drp.models.teacher.t2 import T2DualTeacher
 from kite_drp.train.data import build_pair_tensors, make_loader
 from kite_drp.train.engine import evaluate, fit_teacher, resolve_device, set_seed
 from kite_drp.train.features import (
@@ -34,6 +35,7 @@ from kite_drp.train.features import (
     resolve_similarity_config,
 )
 from kite_drp.train.local_graph import build_local_graphs, local_graph_tensors
+from kite_drp.train.ppi_features import build_ppi_features
 from kite_drp.train.t1_graph import build_t1_graph, graph_tensors
 
 
@@ -45,6 +47,8 @@ def _build_model(
     n_target_genes: int,
     n_graph_genes: int | None = None,
     cell_in_dim: int | None = None,
+    ppi_summary_dim: int = 0,
+    ppi_rwr_dim: int = 0,
 ) -> torch.nn.Module:
     teacher = config["teacher"]
     name = str(teacher.get("name", "t0"))
@@ -63,7 +67,16 @@ def _build_model(
     }
     if name == "b0":
         return BilinearTeacher(**common)
-    if name in {"t0", "t0_p0", "t0_p1", "t1", "t1_graph_only", "t1_local", "t1_mlp"}:
+    if name in {
+        "t0",
+        "t0_p0",
+        "t0_p1",
+        "t1",
+        "t1_graph_only",
+        "t1_local",
+        "t1_mlp",
+        "t2",
+    }:
         graph_model = name in {"t1", "t1_graph_only"}
         backbone = T0Teacher(
             **common,
@@ -91,6 +104,69 @@ def _build_model(
             use_target_table=not graph_model,
         )
         if not graph_model:
+            if name == "t2":
+                tower_cfg = teacher.get("tower", {}) or {}
+                tower = T0Teacher(
+                    pathway_dim=pathway_dim,
+                    morgan_dim=morgan_dim,
+                    n_target_genes=n_target_genes,
+                    d_model=int(tower_cfg.get("d_model", 192)),
+                    hidden=int(tower_cfg.get("hidden", 192)),
+                    dropout=float(tower_cfg.get("dropout", teacher.get("dropout", 0.1))),
+                    use_gin=False,
+                    use_morgan=bool(tower_cfg.get("use_morgan", True)),
+                    use_targets=bool(tower_cfg.get("use_targets", True)),
+                    target_embed_dim=int(
+                        tower_cfg.get("target_embed_dim", teacher.get("target_embed_dim", 16))
+                    ),
+                    modalities=list(
+                        tower_cfg.get("modalities", teacher.get("modalities", ["GE", "MU", "CNV"]))
+                    ),
+                    n_heads=int(tower_cfg.get("n_heads", 4)),
+                    n_layers=int(tower_cfg.get("n_layers", 1)),
+                    top_k=int(tower_cfg.get("top_k", 32)),
+                    use_neighbor=bool(tower_cfg.get("use_neighbor", False)),
+                    modality_dropout=float(
+                        tower_cfg.get("modality_dropout", teacher.get("modality_dropout", 0.15))
+                    ),
+                    readout=str(tower_cfg.get("readout", "sum")),
+                    use_dense_shortcut=bool(tower_cfg.get("use_dense_shortcut", False)),
+                    token_types=bool(tower_cfg.get("token_types", True)),
+                    rank_embedding=bool(tower_cfg.get("rank_embedding", True)),
+                    cell_readout=str(tower_cfg.get("cell_readout", "attention")),
+                    masked_modalities=bool(tower_cfg.get("masked_modalities", True)),
+                    cross_gate=bool(tower_cfg.get("cross_gate", True)),
+                    shared_pathway=bool(tower_cfg.get("shared_pathway", False)),
+                    shared_pathway_proj=bool(tower_cfg.get("shared_pathway_proj", False)),
+                    use_cls_proj=bool(tower_cfg.get("use_cls_proj", True)),
+                    cls_proj_mode=str(tower_cfg.get("cls_proj_mode", "lowrank")),
+                    cls_proj_rank=int(tower_cfg.get("cls_proj_rank", 64)),
+                    target_branch=bool(tower_cfg.get("target_branch", True)),
+                    target_gene_layers=int(tower_cfg.get("target_gene_layers", 1)),
+                    use_gene_table=True,
+                    use_target_table=True,
+                )
+                ppi_cfg = teacher.get("ppi", {}) or {}
+                t2_cfg = teacher.get("t2", {}) or {}
+                use_ppi = bool(ppi_cfg.get("enabled", False))
+                return T2DualTeacher(
+                    backbone,
+                    tower,
+                    summary_dim=ppi_summary_dim
+                    if use_ppi and bool(ppi_cfg.get("use_summary", True))
+                    else 0,
+                    rwr_dim=ppi_rwr_dim
+                    if use_ppi and bool(ppi_cfg.get("use_rwr", True))
+                    else 0,
+                    n_pathways=pathway_dim
+                    if use_ppi and bool(ppi_cfg.get("use_pathway", True))
+                    else 0,
+                    context_hidden=int(ppi_cfg.get("context_hidden", 64)),
+                    dropout=float(t2_cfg.get("dropout", teacher.get("dropout", 0.1))),
+                    fusion=str(t2_cfg.get("fusion", "global")),
+                    alpha_init=float(t2_cfg.get("alpha_init", 0.0)),
+                    tower_weight=float(t2_cfg.get("tower_weight", 0.3)),
+                )
             if name in {"t1_local", "t1_mlp"}:
                 local_cfg = teacher.get("local_graph", {}) or {}
                 if name == "t1_mlp":
@@ -132,7 +208,7 @@ def _build_model(
             use_backbone=name != "t1_graph_only",
         )
     raise KeyError(
-        f"本轮只实现 b0/t0/t0_p0/t0_p1/t1/t1_graph_only/t1_local/t1_mlp，收到 teacher={name}"
+        f"本轮只实现 b0/t0/t0_p0/t0_p1/t1/t1_graph_only/t1_local/t1_mlp/t2，收到 teacher={name}"
     )
 
 
@@ -190,7 +266,7 @@ def _run_fold(
     similarity_enabled = (
         bool(config.get("similarity", {}).get("enabled", True))
         and str(config["teacher"].get("name", "t0"))
-        in {"t0", "t0_p0", "t0_p1", "t1", "t1_graph_only", "t1_local", "t1_mlp"}
+        in {"t0", "t0_p0", "t0_p1", "t1", "t1_graph_only", "t1_local", "t1_mlp", "t2"}
         and bool(config["teacher"].get("use_neighbor", True))
     )
     target_max_tokens = (
@@ -231,6 +307,7 @@ def _run_fold(
     graph_bundle: dict[str, Any] | None = None
     graph_arrays: dict[str, Any] | None = None
     local_bundle: Any | None = None
+    ppi_bundle: Any | None = None
     if teacher_name in {"t1", "t1_graph_only"}:
         graph_bundle = build_t1_graph(
             processed,
@@ -247,6 +324,16 @@ def _run_fold(
             drugs,
             config=config["teacher"].get("local_graph", {}),
             cache_dir=REPO_ROOT / paths["interim_dir"] / "teacher" / "local_graph",
+        )
+    ppi_cfg = config["teacher"].get("ppi", {}) or {}
+    if teacher_name == "t2" and bool(ppi_cfg.get("enabled", False)):
+        ppi_bundle = build_ppi_features(
+            processed,
+            features,
+            drugs,
+            config=ppi_cfg,
+            cache_dir=REPO_ROOT / paths["interim_dir"] / "teacher" / "ppi_features",
+            fold_key=f"{split_id}_fold{fold}",
         )
 
     train_cfg = dict(config["train"])
@@ -268,6 +355,7 @@ def _run_fold(
         shuffle=True,
         use_gin=use_gin,
         local_graphs=(local_bundle.arrays if local_bundle is not None else None),
+        ppi_features=ppi_bundle,
         seed=fold_seed,
         group_by_drug=group_by_drug,
         drugs_per_batch=int(train_cfg.get("drugs_per_batch", 8)),
@@ -282,6 +370,7 @@ def _run_fold(
         shuffle=False,
         use_gin=use_gin,
         local_graphs=(local_bundle.arrays if local_bundle is not None else None),
+        ppi_features=ppi_bundle,
     )
     test_loader = (
         make_loader(
@@ -293,6 +382,7 @@ def _run_fold(
             shuffle=False,
             use_gin=use_gin,
             local_graphs=(local_bundle.arrays if local_bundle is not None else None),
+            ppi_features=ppi_bundle,
         )
         if bool(train_cfg.get("eval_test", False))
         else None
@@ -307,6 +397,8 @@ def _run_fold(
         cell_in_dim=(
             int(graph_arrays["cell_features"].shape[1]) if graph_arrays is not None else None
         ),
+        ppi_summary_dim=(ppi_bundle.summary_dim if ppi_bundle is not None else 0),
+        ppi_rwr_dim=(ppi_bundle.rwr_dim if ppi_bundle is not None else 0),
     )
     params = count_parameters(model)
     params_total = count_parameters(model, trainable_only=False)
@@ -339,7 +431,7 @@ def _run_fold(
         model.set_local_graph(  # type: ignore[attr-defined]
             local_graph_tensors(local_bundle, device=device)
         )
-    if teacher_name in {"t1", "t1_graph_only", "t1_local", "t1_mlp"}:
+    if teacher_name in {"t1", "t1_graph_only", "t1_local", "t1_mlp", "t2"}:
         init_from = config["teacher"].get("init_from")
         if not init_from:
             raise ValueError(f"{teacher_name} 需要 teacher.init_from 指向同折 P1 checkpoint")
@@ -396,6 +488,9 @@ def _run_fold(
         ),
         "local_graph_spec": local_bundle.spec if local_bundle is not None else None,
         "local_graph_hash": (local_bundle.spec.get("hash") if local_bundle is not None else None),
+        "ppi": ppi_cfg if ppi_bundle is not None else None,
+        "ppi_spec": ppi_bundle.spec if ppi_bundle is not None else None,
+        "ppi_hash": (ppi_bundle.spec.get("hash") if ppi_bundle is not None else None),
     }
     (fold_dir / "model_spec.json").write_text(
         json.dumps(model_spec, ensure_ascii=False, indent=2, default=str), encoding="utf-8"

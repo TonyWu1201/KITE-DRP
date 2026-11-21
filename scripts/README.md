@@ -12,6 +12,9 @@
 | [`download_p1_external.py`](download_p1_external.py) | Linux/macOS | 下载 P1：Open Targets / ChEMBL / GDSC1 / CTRPv2 / PRISM（断点续传 + manifest） |
 | [`download_p1_external.py`](download_p1_external.py) | 跨平台 | 下载 P1 外部数据：Open Targets / ChEMBL / GDSC1 / CTRPv2 / PRISM（可续传/校验/写 manifest） |
 | [`nightly_data_check.sh`](nightly_data_check.sh) | Linux（bash） | 夜间全量校验 + pytest + 质量报告 |
+| [`run_t2_quick.py`](run_t2_quick.py) | 跨平台 | T2 无图第二塔 + DTI/PPI 特征快速筛选 |
+| [`analyze_ensembles.py`](analyze_ensembles.py) | 跨平台 | 逐药 SCC 集成/配对/bootstrap 分析 |
+| [`analyze_t2_interpretability.py`](analyze_t2_interpretability.py) | 跨平台 | T2 融合 gate、分层指标、context 遮挡/置换与 top 通路/基因 |
 
 ## 环境自检
 
