@@ -435,6 +435,18 @@ def fit_teacher(
                     "rank_weight": round(rank_weight, 4),
                     "val_r2": round(val_metrics["regression"]["r2"], 4),
                     "val_scc": round(val_metrics["regression"]["scc"], 4),
+                    "val_t2_scc": round(
+                        val_metrics.get("t2_per_drug", {}).get("scc_mean", float("nan")),
+                        4,
+                    ),
+                    "val_t2_ctx_scc": round(
+                        val_metrics.get("t2_ctx_per_drug", {}).get("scc_mean", float("nan")),
+                        4,
+                    ),
+                    "val_ctx_scc": round(
+                        val_metrics.get("ctx_per_drug", {}).get("scc_mean", float("nan")),
+                        4,
+                    ),
                     "val_graph_scc": round(
                         val_metrics.get("graph_regression", {}).get("scc", float("nan")),
                         4,

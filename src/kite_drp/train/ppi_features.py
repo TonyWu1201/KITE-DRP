@@ -121,6 +121,10 @@ class PPIFeatureBundle:
     def rwr_dim(self) -> int:
         return int(self.rwr.shape[2])
 
+    @property
+    def meta_dim(self) -> int:
+        return int(self.meta.shape[1])
+
 
 def _resolve_config(config: dict[str, Any] | None) -> dict[str, Any]:
     payload = json.loads(json.dumps(DEFAULT_PPI_FEATURE_CONFIG))

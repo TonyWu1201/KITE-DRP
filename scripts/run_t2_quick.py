@@ -354,6 +354,9 @@ def _summary(path: Path) -> dict[str, Any] | None:
     mean = payload.get("mean_val", {})
     return {
         "per_drug_scc": mean.get("per_drug_scc"),
+        "t2_per_drug_scc": mean.get("t2_per_drug_scc"),
+        "t2_ctx_per_drug_scc": mean.get("t2_ctx_per_drug_scc"),
+        "ctx_per_drug_scc": mean.get("ctx_per_drug_scc"),
         "scc": mean.get("scc"),
         "r2": mean.get("r2"),
         "auroc": mean.get("auroc"),

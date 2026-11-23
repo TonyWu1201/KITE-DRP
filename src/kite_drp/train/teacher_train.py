@@ -591,16 +591,52 @@ def main(config: DictConfig) -> None:
                     ]
                 )
             )
+        }
+        | {
+            key: float(
+                np.nanmean(
+                    [
+                        result["val"].get(metric, {}).get("scc_mean", float("nan"))
+                        for result in results
+                    ]
+                )
+            )
+            for key, metric in (
+                ("t2_per_drug_scc", "t2_per_drug"),
+                ("t2_ctx_per_drug_scc", "t2_ctx_per_drug"),
+                ("ctx_per_drug_scc", "ctx_per_drug"),
+            )
         },
     }
     if all("test" in result for result in results):
-        summary["mean_test"] = {
-            key: float(np.nanmean([result["test"]["regression"][key] for result in results]))
-            for key in ("r2", "pcc", "scc", "rmse")
-        } | {
-            key: float(np.nanmean([result["test"]["classification"][key] for result in results]))
-            for key in ("auroc", "auprc", "ece")
-        }
+        summary["mean_test"] = (
+            {
+                key: float(np.nanmean([result["test"]["regression"][key] for result in results]))
+                for key in ("r2", "pcc", "scc", "rmse")
+            }
+            | {
+                key: float(
+                    np.nanmean([result["test"]["classification"][key] for result in results])
+                )
+                for key in ("auroc", "auprc", "ece")
+            }
+            | {
+                key: float(
+                    np.nanmean(
+                        [
+                            result["test"].get(metric, {}).get("scc_mean", float("nan"))
+                            for result in results
+                        ]
+                    )
+                )
+                for key, metric in (
+                    ("per_drug_scc", "per_drug"),
+                    ("t2_per_drug_scc", "t2_per_drug"),
+                    ("t2_ctx_per_drug_scc", "t2_ctx_per_drug"),
+                    ("ctx_per_drug_scc", "ctx_per_drug"),
+                )
+            }
+        )
     (output_dir / "summary.json").write_text(
         json.dumps(summary, ensure_ascii=False, indent=2, default=float), encoding="utf-8"
     )
