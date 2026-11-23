@@ -46,6 +46,7 @@ from kite_drp.train.features import (
     resolve_neighbor_source,
     resolve_similarity_config,
 )
+from kite_drp.train.netgp_features import build_netgp_features
 from kite_drp.train.ppi_features import build_ppi_features
 from kite_drp.train.teacher_train import _build_model
 
@@ -55,6 +56,8 @@ BLOCKS = (
     "zero_summary",
     "zero_rwr",
     "zero_pathway",
+    "zero_netgp",
+    "zero_meta",
     "zero_all",
     "permute_all",
 )
@@ -69,13 +72,15 @@ def _load_config(run: Path) -> dict[str, Any]:
     return payload
 
 
-def _per_drug_scc(frame: pd.DataFrame, *, min_samples: int = 10) -> pd.Series:
+def _per_drug_scc(
+    frame: pd.DataFrame, *, min_samples: int = 10, column: str = "y_pred"
+) -> pd.Series:
     values: dict[str, float] = {}
     for drug, group in frame.groupby("compound_uid", sort=True):
         if len(group) < min_samples:
             continue
         y_true = group["y_true"].to_numpy(dtype=float)
-        y_pred = group["y_pred"].to_numpy(dtype=float)
+        y_pred = group[column].to_numpy(dtype=float)
         if len(np.unique(y_true)) < 2 or len(np.unique(y_pred)) < 2:
             continue
         values[str(drug)] = float(stats.spearmanr(y_true, y_pred).statistic)
@@ -90,63 +95,126 @@ def _occlusion_frames(
 ) -> pd.DataFrame:
     rows: list[pd.DataFrame] = []
     model.eval()
+
+    def _column(output, key: str) -> np.ndarray | None:
+        value = output.aux.get(key)
+        return value.float().cpu().numpy() if value is not None else None
+
     with torch.no_grad():
         for batch in loader:
             batch = move_batch(batch, device)
-            base = model(batch).y_hat.float().cpu().numpy()
+            base_output = model(batch)
+            base = base_output.y_hat.float().cpu().numpy()
             variants: dict[str, TeacherBatch] = {"baseline": batch}
-            has_ppi = (
-                batch.ppi_summary is not None
-                and batch.ppi_rwr is not None
-                and batch.ppi_target_pathway is not None
-                and batch.ppi_neighbor_pathway is not None
+            has_prior = any(
+                value is not None
+                for value in (
+                    batch.ppi_summary,
+                    batch.ppi_meta,
+                    batch.netgp_gene_ids,
+                )
             )
-            if not has_ppi:
+            if not has_prior:
                 rows.append(
                     pd.DataFrame(
                         {
                             "row_index": batch.row_index.cpu().numpy(),
                             "block": "baseline",
                             "y_pred": base,
+                            "y_pred_t2": _column(base_output, "y_t2"),
+                            "y_pred_ctx": _column(base_output, "y_ctx"),
                         }
                     )
                 )
                 continue
-            permutation = torch.randperm(
-                batch.ppi_summary.size(0), device=batch.ppi_summary.device
-            )
+            batch_size = int(batch.ge.size(0))
+            device_ = batch.ge.device
+            permutation = torch.randperm(batch_size, device=device_)
             for block in BLOCKS:
                 variant = copy.copy(batch)
                 if block == "zero_summary":
+                    if batch.ppi_summary is None:
+                        continue
                     variant.ppi_summary = torch.zeros_like(batch.ppi_summary)
                 elif block == "zero_rwr":
+                    if batch.ppi_rwr is None:
+                        continue
                     variant.ppi_rwr = torch.zeros_like(batch.ppi_rwr)
                 elif block == "zero_target_pathway":
+                    if batch.ppi_target_pathway is None:
+                        continue
                     variant.ppi_target_pathway = torch.zeros_like(batch.ppi_target_pathway)
                 elif block == "zero_neighbor_pathway":
+                    if batch.ppi_neighbor_pathway is None:
+                        continue
                     variant.ppi_neighbor_pathway = torch.zeros_like(batch.ppi_neighbor_pathway)
                 elif block == "zero_pathway":
+                    if batch.ppi_target_pathway is None or batch.ppi_neighbor_pathway is None:
+                        continue
                     variant.ppi_target_pathway = torch.zeros_like(batch.ppi_target_pathway)
                     variant.ppi_neighbor_pathway = torch.zeros_like(batch.ppi_neighbor_pathway)
+                elif block == "zero_netgp":
+                    if batch.netgp_gene_weight is None:
+                        continue
+                    variant.netgp_gene_weight = torch.zeros_like(batch.netgp_gene_weight)
+                    variant.netgp_gene_mask = torch.zeros_like(
+                        batch.netgp_gene_mask, dtype=torch.bool
+                    )
+                    variant.netgp_gene_values = torch.zeros_like(batch.netgp_gene_values)
+                    if batch.netgp_pathway is not None:
+                        variant.netgp_pathway = torch.zeros_like(batch.netgp_pathway)
+                elif block == "zero_meta":
+                    if batch.ppi_meta is None:
+                        continue
+                    variant.ppi_meta = torch.zeros_like(batch.ppi_meta)
                 elif block == "zero_all":
-                    variant.ppi_summary = torch.zeros_like(batch.ppi_summary)
-                    variant.ppi_rwr = torch.zeros_like(batch.ppi_rwr)
-                    variant.ppi_target_pathway = torch.zeros_like(batch.ppi_target_pathway)
-                    variant.ppi_neighbor_pathway = torch.zeros_like(batch.ppi_neighbor_pathway)
+                    if batch.ppi_summary is not None:
+                        variant.ppi_summary = torch.zeros_like(batch.ppi_summary)
+                    if batch.ppi_rwr is not None:
+                        variant.ppi_rwr = torch.zeros_like(batch.ppi_rwr)
+                    if batch.ppi_target_pathway is not None:
+                        variant.ppi_target_pathway = torch.zeros_like(batch.ppi_target_pathway)
+                    if batch.ppi_neighbor_pathway is not None:
+                        variant.ppi_neighbor_pathway = torch.zeros_like(batch.ppi_neighbor_pathway)
+                    if batch.ppi_meta is not None:
+                        variant.ppi_meta = torch.zeros_like(batch.ppi_meta)
+                    if batch.netgp_gene_weight is not None:
+                        variant.netgp_gene_weight = torch.zeros_like(batch.netgp_gene_weight)
+                        variant.netgp_gene_mask = torch.zeros_like(
+                            batch.netgp_gene_mask, dtype=torch.bool
+                        )
+                        variant.netgp_gene_values = torch.zeros_like(batch.netgp_gene_values)
+                        if batch.netgp_pathway is not None:
+                            variant.netgp_pathway = torch.zeros_like(batch.netgp_pathway)
                 elif block == "permute_all":
-                    variant.ppi_summary = batch.ppi_summary[permutation]
-                    variant.ppi_rwr = batch.ppi_rwr[permutation]
-                    variant.ppi_target_pathway = batch.ppi_target_pathway[permutation]
-                    variant.ppi_neighbor_pathway = batch.ppi_neighbor_pathway[permutation]
+                    if batch.ppi_summary is not None:
+                        variant.ppi_summary = batch.ppi_summary[permutation]
+                    if batch.ppi_rwr is not None:
+                        variant.ppi_rwr = batch.ppi_rwr[permutation]
+                    if batch.ppi_target_pathway is not None:
+                        variant.ppi_target_pathway = batch.ppi_target_pathway[permutation]
+                    if batch.ppi_neighbor_pathway is not None:
+                        variant.ppi_neighbor_pathway = batch.ppi_neighbor_pathway[permutation]
+                    if batch.ppi_meta is not None:
+                        variant.ppi_meta = batch.ppi_meta[permutation]
+                    if batch.netgp_gene_ids is not None:
+                        variant.netgp_gene_ids = batch.netgp_gene_ids[permutation]
+                        variant.netgp_gene_weight = batch.netgp_gene_weight[permutation]
+                        variant.netgp_gene_values = batch.netgp_gene_values[permutation]
+                        variant.netgp_gene_mask = batch.netgp_gene_mask[permutation]
+                    if batch.netgp_pathway is not None:
+                        variant.netgp_pathway = batch.netgp_pathway[permutation]
                 variants[block] = variant
             for block, variant in variants.items():
-                y_pred = base if block == "baseline" else model(variant).y_hat.float().cpu().numpy()
+                output = base_output if block == "baseline" else model(variant)
                 rows.append(
                     pd.DataFrame(
                         {
                             "row_index": batch.row_index.cpu().numpy(),
                             "block": block,
-                            "y_pred": y_pred,
+                            "y_pred": output.y_hat.float().cpu().numpy(),
+                            "y_pred_t2": _column(output, "y_t2"),
+                            "y_pred_ctx": _column(output, "y_ctx"),
                         }
                     )
                 )
@@ -214,15 +282,12 @@ def main() -> None:
     active_modalities = list(teacher_cfg.get("modalities", ["GE", "MU", "CNV"]))
     similarity_cfg = resolve_similarity_config(config, active_modalities)
     neighbor_source = resolve_neighbor_source(teacher_cfg, active_modalities)
-    similarity_enabled = (
-        bool(config.get("similarity", {}).get("enabled", True))
-        and bool(teacher_cfg.get("use_neighbor", True))
+    similarity_enabled = bool(config.get("similarity", {}).get("enabled", True)) and bool(
+        teacher_cfg.get("use_neighbor", True)
     )
     target_max_tokens = int(teacher_cfg.get("target_max_tokens", 64))
     if similarity_enabled:
-        fold_def = next(
-            item for item in base.split["folds"] if int(item["fold"]) == args.fold
-        )
+        fold_def = next(item for item in base.split["folds"] if int(item["fold"]) == args.fold)
         neighbors, weights, _, _ = build_fold_similarity(
             features,
             train_cells=list(fold_def["train"]),
@@ -262,8 +327,20 @@ def main() -> None:
         if bool(ppi_cfg.get("enabled", False))
         else None
     )
+    netgp_cfg = ppi_cfg.get("netgp", {}) or {}
+    netgp_bundle = (
+        build_netgp_features(
+            processed,
+            features,
+            drugs,
+            config=netgp_cfg,
+            cache_dir=REPO_ROOT / paths["interim_dir"] / "teacher" / "netgp_features",
+        )
+        if bool(netgp_cfg.get("enabled", False))
+        else None
+    )
     # 即使模型不用 PPI（如 t2_base），也构建一份特征用于 tier 分层与审计。
-    tier_bundle = ppi_bundle
+    tier_bundle = ppi_bundle if ppi_bundle is not None else netgp_bundle
     if tier_bundle is None:
         try:
             tier_bundle = build_ppi_features(
@@ -283,6 +360,22 @@ def main() -> None:
         n_target_genes=drugs.target_dim,
         ppi_summary_dim=(ppi_bundle.summary_dim if ppi_bundle is not None else 0),
         ppi_rwr_dim=(ppi_bundle.rwr_dim if ppi_bundle is not None else 0),
+        ppi_meta_dim=(
+            ppi_bundle.meta_dim
+            if ppi_bundle is not None and bool(ppi_cfg.get("use_meta", False))
+            else (
+                netgp_bundle.meta_dim
+                if netgp_bundle is not None and bool(netgp_cfg.get("use_meta", True))
+                else 0
+            )
+        ),
+        netgp_top_k=(netgp_bundle.top_k if netgp_bundle is not None else 0),
+        netgp_pathway_dim=(
+            netgp_bundle.pathway_dim
+            if netgp_bundle is not None and bool(netgp_cfg.get("use_pathway", False))
+            else 0
+        ),
+        netgp_reliability_dim=(netgp_bundle.reliability_dim if netgp_bundle is not None else 0),
     )
     device = resolve_device(args.device)
     model = model.to(device)
@@ -300,6 +393,7 @@ def main() -> None:
         batch_size=args.batch_size,
         shuffle=False,
         ppi_features=ppi_bundle,
+        netgp_features=netgp_bundle,
     )
     metrics, frame = evaluate(model, loader, device=device, base=base)
     frame = frame.loc[frame["label_mask"]].copy()
@@ -341,41 +435,53 @@ def main() -> None:
     occlusion = occlusion.merge(
         frame[["row_index", "compound_uid", "y_true"]], on="row_index", how="inner"
     )
-    occ_per_drug: dict[str, pd.Series] = {}
-    for block, group in occlusion.groupby("block", sort=True):
-        occ_per_drug[block] = _per_drug_scc(group)
-    baseline_scc = occ_per_drug["baseline"]
-    for block in BLOCKS:
-        if block not in occ_per_drug:
+    view_columns = {"final": "y_pred", "t2": "y_pred_t2", "ctx": "y_pred_ctx"}
+    occ_by_view: dict[str, dict[str, pd.Series]] = {}
+    for view, column in view_columns.items():
+        if column not in occlusion.columns:
             continue
-        delta = occ_per_drug[block] - baseline_scc
-        common = per_drug_frame["compound_uid"].isin(delta.index)
-        per_drug_frame.loc[common, f"delta_{block}"] = per_drug_frame.loc[
-            common, "compound_uid"
-        ].map(delta)
+        view_frame = occlusion.dropna(subset=[column])
+        per_block = {
+            block: _per_drug_scc(group, column=column)
+            for block, group in view_frame.groupby("block", sort=True)
+        }
+        if "baseline" not in per_block:
+            continue
+        occ_by_view[view] = per_block
+        baseline_scc = per_block["baseline"]
+        suffix = "" if view == "final" else f"_{view}"
+        for block in BLOCKS:
+            if block not in per_block:
+                continue
+            delta = per_block[block] - baseline_scc
+            common = per_drug_frame["compound_uid"].isin(delta.index)
+            per_drug_frame.loc[common, f"delta_{block}{suffix}"] = per_drug_frame.loc[
+                common, "compound_uid"
+            ].map(delta)
     tier_frame = _tier_table(per_drug_frame)
 
     occlusion_rows = []
-    for block in ["baseline", *BLOCKS]:
-        if block not in occ_per_drug:
-            continue
-        series = occ_per_drug[block]
-        delta = (
-            pd.Series(0.0, index=series.index)
-            if block == "baseline"
-            else series - baseline_scc
-        )
-        for tier, group in per_drug_frame.groupby("tier", sort=True):
-            ids = group["compound_uid"]
-            values = delta.reindex(ids).dropna()
-            occlusion_rows.append(
-                {
-                    "block": block,
-                    "tier": tier,
-                    "n_drugs": int(values.size),
-                    "mean_delta_scc": float(values.mean()) if values.size else float("nan"),
-                }
+    for view, per_block in occ_by_view.items():
+        baseline_scc = per_block["baseline"]
+        for block in ["baseline", *BLOCKS]:
+            if block not in per_block:
+                continue
+            series = per_block[block]
+            delta = (
+                pd.Series(0.0, index=series.index) if block == "baseline" else series - baseline_scc
             )
+            for tier, group in per_drug_frame.groupby("tier", sort=True):
+                ids = group["compound_uid"]
+                values = delta.reindex(ids).dropna()
+                occlusion_rows.append(
+                    {
+                        "view": view,
+                        "block": block,
+                        "tier": tier,
+                        "n_drugs": int(values.size),
+                        "mean_delta_scc": (float(values.mean()) if values.size else float("nan")),
+                    }
+                )
     occlusion_frame = pd.DataFrame(occlusion_rows)
 
     # pathway 遮挡影响最大的药物 -> top 通路与 RWR top 基因
@@ -407,9 +513,7 @@ def main() -> None:
                     "compound_uid": compound,
                     "tier": row.tier,
                     "delta_zero_pathway": float(row.delta_zero_pathway),
-                    "top_target_pathways": ";".join(
-                        pathway_ids[int(item)] for item in target_top
-                    ),
+                    "top_target_pathways": ";".join(pathway_ids[int(item)] for item in target_top),
                     "top_neighbor_pathways": ";".join(
                         pathway_ids[int(item)] for item in neighbor_top
                     ),
@@ -418,9 +522,7 @@ def main() -> None:
         pathway_attr = pd.DataFrame(rows)
         if not pathway_attr.empty:
             gene_attr = ppi_bundle.audit[
-                ppi_bundle.audit["compound_uid"].astype(str).isin(
-                    pathway_attr["compound_uid"]
-                )
+                ppi_bundle.audit["compound_uid"].astype(str).isin(pathway_attr["compound_uid"])
             ][["compound_uid", "tier", "n_roots", "n_neighbors", "rwr_top_genes"]]
 
     per_drug_frame.to_csv(out / "per_drug.csv", index=False)
@@ -446,19 +548,22 @@ def main() -> None:
             "p1": metrics.get("p1_regression", {}),
             "t2": metrics.get("t2_regression", {}),
             "final_per_drug_scc": per_drug.get("scc_mean"),
-            "p1_per_drug_scc": per_drug_metrics(
-                frame.assign(y_pred=frame["y_p1_pred"])
-            ).get("scc_mean"),
-            "t2_per_drug_scc": per_drug_metrics(
-                frame.assign(y_pred=frame["y_t2_pred"])
-            ).get("scc_mean"),
+            "p1_per_drug_scc": per_drug_metrics(frame.assign(y_pred=frame["y_p1_pred"])).get(
+                "scc_mean"
+            ),
+            "t2_per_drug_scc": per_drug_metrics(frame.assign(y_pred=frame["y_t2_pred"])).get(
+                "scc_mean"
+            ),
         },
         "per_tier": tier_frame.to_dict(orient="records"),
         "occlusion_by_tier": occlusion_frame.to_dict(orient="records"),
         "occlusion_mean": {
-            block: float((occ_per_drug[block] - baseline_scc).mean())
-            for block in BLOCKS
-            if block in occ_per_drug
+            view: {
+                block: float((per_block[block] - per_block["baseline"]).mean())
+                for block in BLOCKS
+                if block in per_block
+            }
+            for view, per_block in occ_by_view.items()
         },
     }
     (out / "summary.json").write_text(

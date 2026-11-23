@@ -87,6 +87,175 @@ VARIANTS: dict[str, dict[str, Any]] = {
         "teacher": "t2",
         "overrides": ("teacher.t2.fusion=mean",),
     },
+    # ---- S0：可辨识读出 / 混杂对照 ----
+    "t2_meta": {
+        "teacher": "t2",
+        "overrides": (
+            "teacher.ppi.use_summary=false",
+            "teacher.ppi.use_rwr=false",
+            "teacher.ppi.use_pathway=false",
+            "teacher.ppi.use_meta=true",
+        ),
+    },
+    "t2_decomp_p1": {
+        "teacher": "t2",
+        "monitor": "val_t2_per_drug_scc",
+        "overrides": (
+            "teacher.ppi.enabled=false",
+            "teacher.t2.fusion=none",
+            "teacher.t2.context_mode=head",
+            "train.ctx_weight=0.0",
+        ),
+    },
+    "t2_ctxhead": {
+        "teacher": "t2",
+        "monitor": "val_t2_ctx_per_drug_scc",
+        "overrides": (
+            "teacher.t2.fusion=none",
+            "teacher.t2.context_mode=head",
+            "teacher.t2.ctx_gate_init=1.0",
+            "train.ctx_weight=0.3",
+            "train.ctx_cls_weight=0.2",
+        ),
+    },
+    "t2_both": {
+        "teacher": "t2",
+        "overrides": (
+            "teacher.t2.fusion=global",
+            "teacher.t2.context_mode=both",
+            "train.ctx_weight=0.1",
+        ),
+    },
+    # ---- S1：NetGP 间接靶点 + 归因对照 ----
+    "t2_netgp": {
+        "teacher": "t2",
+        "monitor": "val_t2_ctx_per_drug_scc",
+        "overrides": (
+            "teacher.ppi.enabled=false",
+            "teacher.ppi.netgp.enabled=true",
+            "teacher.t2.fusion=none",
+            "teacher.t2.context_mode=head",
+            "teacher.t2.ctx_gate_init=1.0",
+            "train.ctx_weight=0.3",
+            "train.ctx_cls_weight=0.2",
+        ),
+    },
+    "t2_netgp_add": {
+        "teacher": "t2",
+        "overrides": (
+            "teacher.ppi.enabled=false",
+            "teacher.ppi.netgp.enabled=true",
+            "teacher.t2.fusion=global",
+            "teacher.t2.context_mode=add",
+        ),
+    },
+    "t2_netgp_pathway": {
+        "teacher": "t2",
+        "monitor": "val_t2_ctx_per_drug_scc",
+        "overrides": (
+            "teacher.ppi.enabled=false",
+            "teacher.ppi.netgp.enabled=true",
+            "teacher.ppi.netgp.use_pathway=true",
+            "teacher.ppi.netgp.pathway_reseed=true",
+            "teacher.ppi.netgp.iterations=2",
+            "teacher.t2.fusion=none",
+            "teacher.t2.context_mode=head",
+            "teacher.t2.ctx_gate_init=1.0",
+            "train.ctx_weight=0.3",
+        ),
+    },
+    "t2_netgp_rewire": {
+        "teacher": "t2",
+        "monitor": "val_t2_ctx_per_drug_scc",
+        "overrides": (
+            "teacher.ppi.enabled=false",
+            "teacher.ppi.netgp.enabled=true",
+            "teacher.ppi.netgp.graph_control=configuration",
+            "teacher.t2.fusion=none",
+            "teacher.t2.context_mode=head",
+            "teacher.t2.ctx_gate_init=1.0",
+            "train.ctx_weight=0.3",
+        ),
+    },
+    "t2_netgp_permute": {
+        "teacher": "t2",
+        "monitor": "val_t2_ctx_per_drug_scc",
+        "overrides": (
+            "teacher.ppi.enabled=false",
+            "teacher.ppi.netgp.enabled=true",
+            "teacher.ppi.netgp.dti_control=permute_drugs",
+            "teacher.t2.fusion=none",
+            "teacher.t2.context_mode=head",
+            "teacher.t2.ctx_gate_init=1.0",
+            "train.ctx_weight=0.3",
+        ),
+    },
+    "t2_netgp_random": {
+        "teacher": "t2",
+        "monitor": "val_t2_ctx_per_drug_scc",
+        "overrides": (
+            "teacher.ppi.enabled=false",
+            "teacher.ppi.netgp.enabled=true",
+            "teacher.ppi.netgp.gene_control=random_matched",
+            "teacher.t2.fusion=none",
+            "teacher.t2.context_mode=head",
+            "teacher.t2.ctx_gate_init=1.0",
+            "train.ctx_weight=0.3",
+        ),
+    },
+    # 先验单独训练：只看 y_ctx 的逐药 SCC，回答“先验是否可学”。
+    "t2_prior_only": {
+        "teacher": "t2",
+        "monitor": "val_ctx_per_drug_scc",
+        "overrides": (
+            "teacher.ppi.enabled=false",
+            "teacher.ppi.netgp.enabled=true",
+            "teacher.t2.fusion=none",
+            "teacher.t2.context_mode=head",
+            "teacher.t2.ctx_gate_init=0.0",
+            "train.ctx_weight=1.0",
+            "train.ctx_cls_weight=0.2",
+        ),
+    },
+    "t2_prior_only_rewire": {
+        "teacher": "t2",
+        "monitor": "val_ctx_per_drug_scc",
+        "overrides": (
+            "teacher.ppi.enabled=false",
+            "teacher.ppi.netgp.enabled=true",
+            "teacher.ppi.netgp.graph_control=configuration",
+            "teacher.t2.fusion=none",
+            "teacher.t2.context_mode=head",
+            "teacher.t2.ctx_gate_init=0.0",
+            "train.ctx_weight=1.0",
+        ),
+    },
+    "t2_prior_only_permute": {
+        "teacher": "t2",
+        "monitor": "val_ctx_per_drug_scc",
+        "overrides": (
+            "teacher.ppi.enabled=false",
+            "teacher.ppi.netgp.enabled=true",
+            "teacher.ppi.netgp.dti_control=permute_drugs",
+            "teacher.t2.fusion=none",
+            "teacher.t2.context_mode=head",
+            "teacher.t2.ctx_gate_init=0.0",
+            "train.ctx_weight=1.0",
+        ),
+    },
+    "t2_prior_only_random": {
+        "teacher": "t2",
+        "monitor": "val_ctx_per_drug_scc",
+        "overrides": (
+            "teacher.ppi.enabled=false",
+            "teacher.ppi.netgp.enabled=true",
+            "teacher.ppi.netgp.gene_control=random_matched",
+            "teacher.t2.fusion=none",
+            "teacher.t2.context_mode=head",
+            "teacher.t2.ctx_gate_init=0.0",
+            "train.ctx_weight=1.0",
+        ),
+    },
 }
 
 
@@ -166,7 +335,7 @@ def _command(
         f"train.epochs={epochs}",
         f"train.patience={patience}",
         f"train.batch_size={batch_size}",
-        f"train.monitor={monitor}",
+        f"train.monitor={spec.get('monitor', monitor)}",
         "train.eval_test=false",
         *spec["overrides"],
     ]

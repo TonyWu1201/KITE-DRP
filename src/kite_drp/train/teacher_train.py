@@ -35,6 +35,7 @@ from kite_drp.train.features import (
     resolve_similarity_config,
 )
 from kite_drp.train.local_graph import build_local_graphs, local_graph_tensors
+from kite_drp.train.netgp_features import build_netgp_features
 from kite_drp.train.ppi_features import build_ppi_features
 from kite_drp.train.t1_graph import build_t1_graph, graph_tensors
 
@@ -49,6 +50,10 @@ def _build_model(
     cell_in_dim: int | None = None,
     ppi_summary_dim: int = 0,
     ppi_rwr_dim: int = 0,
+    ppi_meta_dim: int = 0,
+    netgp_top_k: int = 0,
+    netgp_pathway_dim: int = 0,
+    netgp_reliability_dim: int = 0,
 ) -> torch.nn.Module:
     teacher = config["teacher"]
     name = str(teacher.get("name", "t0"))
@@ -155,17 +160,25 @@ def _build_model(
                     summary_dim=ppi_summary_dim
                     if use_ppi and bool(ppi_cfg.get("use_summary", True))
                     else 0,
-                    rwr_dim=ppi_rwr_dim
-                    if use_ppi and bool(ppi_cfg.get("use_rwr", True))
-                    else 0,
+                    rwr_dim=ppi_rwr_dim if use_ppi and bool(ppi_cfg.get("use_rwr", True)) else 0,
                     n_pathways=pathway_dim
                     if use_ppi and bool(ppi_cfg.get("use_pathway", True))
                     else 0,
+                    meta_dim=ppi_meta_dim,
+                    netgp_top_k=netgp_top_k,
+                    netgp_pathway_dim=netgp_pathway_dim,
+                    netgp_reliability_dim=netgp_reliability_dim,
+                    n_target_genes=n_target_genes,
+                    modalities=list(teacher.get("modalities", ["GE", "MU", "CNV"])),
                     context_hidden=int(ppi_cfg.get("context_hidden", 64)),
                     dropout=float(t2_cfg.get("dropout", teacher.get("dropout", 0.1))),
                     fusion=str(t2_cfg.get("fusion", "global")),
                     alpha_init=float(t2_cfg.get("alpha_init", 0.0)),
                     tower_weight=float(t2_cfg.get("tower_weight", 0.3)),
+                    context_mode=str(t2_cfg.get("context_mode", "add")),
+                    ctx_gate_init=float(t2_cfg.get("ctx_gate_init", 0.0)),
+                    netgp_gate_init=float(t2_cfg.get("netgp_gate_init", 0.0)),
+                    zero_uncovered=bool(t2_cfg.get("zero_uncovered", True)),
                 )
             if name in {"t1_local", "t1_mlp"}:
                 local_cfg = teacher.get("local_graph", {}) or {}
@@ -335,6 +348,16 @@ def _run_fold(
             cache_dir=REPO_ROOT / paths["interim_dir"] / "teacher" / "ppi_features",
             fold_key=f"{split_id}_fold{fold}",
         )
+    netgp_cfg = ppi_cfg.get("netgp", {}) or {}
+    netgp_bundle: Any | None = None
+    if teacher_name == "t2" and bool(netgp_cfg.get("enabled", False)):
+        netgp_bundle = build_netgp_features(
+            processed,
+            features,
+            drugs,
+            config=netgp_cfg,
+            cache_dir=REPO_ROOT / paths["interim_dir"] / "teacher" / "netgp_features",
+        )
 
     train_cfg = dict(config["train"])
     train_cfg.update(config["teacher"].get("train", {}))
@@ -356,6 +379,7 @@ def _run_fold(
         use_gin=use_gin,
         local_graphs=(local_bundle.arrays if local_bundle is not None else None),
         ppi_features=ppi_bundle,
+        netgp_features=netgp_bundle,
         seed=fold_seed,
         group_by_drug=group_by_drug,
         drugs_per_batch=int(train_cfg.get("drugs_per_batch", 8)),
@@ -371,6 +395,7 @@ def _run_fold(
         use_gin=use_gin,
         local_graphs=(local_bundle.arrays if local_bundle is not None else None),
         ppi_features=ppi_bundle,
+        netgp_features=netgp_bundle,
     )
     test_loader = (
         make_loader(
@@ -383,6 +408,7 @@ def _run_fold(
             use_gin=use_gin,
             local_graphs=(local_bundle.arrays if local_bundle is not None else None),
             ppi_features=ppi_bundle,
+            netgp_features=netgp_bundle,
         )
         if bool(train_cfg.get("eval_test", False))
         else None
@@ -399,6 +425,22 @@ def _run_fold(
         ),
         ppi_summary_dim=(ppi_bundle.summary_dim if ppi_bundle is not None else 0),
         ppi_rwr_dim=(ppi_bundle.rwr_dim if ppi_bundle is not None else 0),
+        ppi_meta_dim=(
+            ppi_bundle.meta_dim
+            if ppi_bundle is not None and bool(ppi_cfg.get("use_meta", False))
+            else (
+                netgp_bundle.meta_dim
+                if netgp_bundle is not None and bool(netgp_cfg.get("use_meta", True))
+                else 0
+            )
+        ),
+        netgp_top_k=(netgp_bundle.top_k if netgp_bundle is not None else 0),
+        netgp_pathway_dim=(
+            netgp_bundle.pathway_dim
+            if netgp_bundle is not None and bool(netgp_cfg.get("use_pathway", False))
+            else 0
+        ),
+        netgp_reliability_dim=(netgp_bundle.reliability_dim if netgp_bundle is not None else 0),
     )
     params = count_parameters(model)
     params_total = count_parameters(model, trainable_only=False)
@@ -491,6 +533,9 @@ def _run_fold(
         "ppi": ppi_cfg if ppi_bundle is not None else None,
         "ppi_spec": ppi_bundle.spec if ppi_bundle is not None else None,
         "ppi_hash": (ppi_bundle.spec.get("hash") if ppi_bundle is not None else None),
+        "netgp": netgp_cfg if netgp_bundle is not None else None,
+        "netgp_spec": netgp_bundle.spec if netgp_bundle is not None else None,
+        "netgp_hash": (netgp_bundle.spec.get("hash") if netgp_bundle is not None else None),
     }
     (fold_dir / "model_spec.json").write_text(
         json.dumps(model_spec, ensure_ascii=False, indent=2, default=str), encoding="utf-8"

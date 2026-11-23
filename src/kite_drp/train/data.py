@@ -337,6 +337,47 @@ def _local_graph_batch(
     }
 
 
+def _netgp_batch(
+    netgp_features: Any,
+    *,
+    tensors: PairTensors,
+    cell_idx: np.ndarray,
+    drug_idx: np.ndarray,
+) -> dict[str, np.ndarray]:
+    """读取每个 (drug, cell) 的间接靶点基因值与传播权重。"""
+
+    ids = np.asarray(netgp_features.gene_ids)[drug_idx].astype(np.int64, copy=False)
+    weight = np.asarray(netgp_features.gene_weight)[drug_idx].astype(np.float32, copy=False)
+    mask = weight > 0
+    names = tensors.target_modalities
+    values = np.zeros((*ids.shape, 2 * len(names)), dtype=np.float32)
+    grid = cell_idx[:, None]
+    sources = {
+        "GE": (tensors.gene_ge, tensors.gene_ge_valid, tensors.cell_ge_mask),
+        "MU": (tensors.gene_mu, tensors.gene_mu_available, tensors.cell_mu_mask),
+        "CNV": (tensors.gene_cnv, tensors.gene_cnv_valid, tensors.cell_cnv_mask),
+    }
+    for position, name in enumerate(names):
+        matrix, valid_genes, cell_mask = sources[name]
+        values[..., 2 * position] = matrix[grid, ids]  # type: ignore[index]
+        values[..., 2 * position + 1] = (
+            cell_mask[cell_idx, None] & valid_genes[ids]  # type: ignore[index]
+        ).astype(np.float32)
+    values[~mask] = 0.0
+    return {
+        "netgp_gene_ids": ids,
+        "netgp_gene_values": values,
+        "netgp_gene_weight": weight,
+        "netgp_gene_mask": mask,
+        "netgp_pathway": np.asarray(netgp_features.pathway_profile)[drug_idx].astype(
+            np.float32, copy=False
+        ),
+        "netgp_reliability": np.asarray(netgp_features.reliability)[drug_idx].astype(
+            np.float32, copy=False
+        ),
+    }
+
+
 def collate_pairs(
     indices: list[int],
     *,
@@ -346,6 +387,7 @@ def collate_pairs(
     use_gin: bool = False,
     local_graphs: Any | None = None,
     ppi_features: Any | None = None,
+    netgp_features: Any | None = None,
 ) -> TeacherBatch:
     rows = np.asarray(indices, dtype=np.int64)
     cell_idx = base.cell_idx[rows]
@@ -453,6 +495,30 @@ def collate_pairs(
         batch.ppi_tier = torch.from_numpy(
             np.asarray(ppi_features.tier)[drug_idx].astype(np.int64, copy=False)
         )
+        meta = getattr(ppi_features, "meta", None)
+        if meta is not None:
+            batch.ppi_meta = torch.from_numpy(
+                np.asarray(meta)[drug_idx].astype(np.float32, copy=False)
+            )
+    if netgp_features is not None:
+        for key, value in _netgp_batch(
+            netgp_features,
+            tensors=tensors,
+            cell_idx=cell_idx,
+            drug_idx=drug_idx,
+        ).items():
+            setattr(batch, key, torch.from_numpy(value))
+        if batch.ppi_coverage is None:
+            batch.ppi_coverage = torch.from_numpy(
+                np.asarray(netgp_features.coverage)[drug_idx].astype(bool, copy=False)
+            )
+            batch.ppi_tier = torch.from_numpy(
+                np.asarray(netgp_features.tier)[drug_idx].astype(np.int64, copy=False)
+            )
+        if batch.ppi_meta is None:
+            batch.ppi_meta = torch.from_numpy(
+                np.asarray(netgp_features.meta)[drug_idx].astype(np.float32, copy=False)
+            )
     if use_gin:
         graph = _graph_batch(drug_idx, drugs)
         batch.graph_node_feat = graph.get("node_feat")  # type: ignore[assignment]
@@ -475,6 +541,7 @@ def make_loader(
     use_gin: bool = False,
     local_graphs: Any | None = None,
     ppi_features: Any | None = None,
+    netgp_features: Any | None = None,
     seed: int = 0,
     group_by_drug: bool = False,
     drugs_per_batch: int = 8,
@@ -491,6 +558,7 @@ def make_loader(
             use_gin=use_gin,
             local_graphs=local_graphs,
             ppi_features=ppi_features,
+            netgp_features=netgp_features,
         )
 
     if group_by_drug:
