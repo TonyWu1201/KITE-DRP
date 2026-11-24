@@ -72,6 +72,9 @@ ppi:
   use_summary: true
   use_rwr: true
   use_pathway: true
+  # 药物级元特征（coverage/tier/根数/邻居数）；逐药常数，
+  # 不改变逐药 SCC，只用于 t2_meta 混杂对照与 reliability gate。
+  use_meta: false
   context_hidden: 64
   ppi_min_score: 0.7
   # ppi | pseudo
@@ -84,13 +87,46 @@ ppi:
   # none | permute_drugs | gaussian
   random_control: none
   seed: 20261120
+  # NetGP 式“间接靶点”传播（排除直接靶点；S1 主实验）
+  netgp:
+    enabled: false
+    use_pathway: false
+    use_meta: true
+    ppi_min_score: 0.7
+    restart: 0.5
+    steps: 20
+    top_k: 64
+    exclude_roots: true
+    # symmetric | row
+    normalization: symmetric
+    pathway_reseed: false
+    pathway_top_n: 10
+    pathway_min_overlap: 5
+    pathway_ora_top_genes: 200
+    reseed_weight: 0.5
+    iterations: 1
+    # none | configuration
+    graph_control: none
+    # none | permute_drugs
+    dti_control: none
+    # none | random_matched
+    gene_control: none
+    seed: 20261123
 
 # ---- 融合与训练 ----
 t2:
-  fusion: global  # global | sample
+  # global | mean | sample | none
+  # none = 只训练塔/先验头，融合权重留给 val 上的事后校准
+  fusion: global
+  # add | head | both
+  # head = 先验分支有独立 y_ctx；both = 同时加入 z_pair 和独立头
+  context_mode: add
   alpha_init: 0.0
   tower_weight: 0.3
   dropout: 0.1
+  ctx_gate_init: 0.0
+  netgp_gate_init: 0.0
+  zero_uncovered: true
 
 train:
   lr: 1.5e-4
@@ -106,3 +142,5 @@ train:
   # 第二塔深监督：即使融合 gate 暂时为 0，第二塔也持续学习。
   tower_weight: 0.3
   tower_cls_weight: 0.2
+  # 先验独立头的深监督权重在 configs/train/teacher.yaml 的顶层 ctx_weight；
+  # 不在这里重复，避免 teacher.train 覆盖 CLI 的 train.ctx_weight。

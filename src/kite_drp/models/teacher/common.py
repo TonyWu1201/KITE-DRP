@@ -58,6 +58,15 @@ class TeacherBatch:
     ppi_neighbor_pathway: Tensor | None = None  # (B, P)：邻居通路 profile
     ppi_coverage: Tensor | None = None  # (B,) 该药是否有合规 DTI
     ppi_tier: Tensor | None = None  # (B,) 0=none, 1=gdsc_only, 2=ot
+    # 药物级元特征：coverage/tier/根数/邻居数；逐药常数。
+    ppi_meta: Tensor | None = None  # (B, F_meta)
+    # NetGP 间接靶点：每个 (drug, cell) 读 top-k 非靶点基因的组学。
+    netgp_gene_ids: Tensor | None = None  # (B, K) 基因表索引
+    netgp_gene_values: Tensor | None = None  # (B, K, 2×M) 值 + availability
+    netgp_gene_weight: Tensor | None = None  # (B, K) 传播权重，和为 1
+    netgp_gene_mask: Tensor | None = None  # (B, K) bool
+    netgp_pathway: Tensor | None = None  # (B, P) -log10(ORA p)
+    netgp_reliability: Tensor | None = None  # (B, R) 传播可靠性
 
 
 @dataclass

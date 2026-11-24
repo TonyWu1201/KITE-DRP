@@ -30,3 +30,6 @@ ema_decay: 0.0
 min_epochs: 0
 # test 只在最终模型上开启；默认不评，避免泄漏
 eval_test: false
+# T2 先验独立头深监督（context_mode=head/both）
+ctx_weight: 0.0
+ctx_cls_weight: 0.0

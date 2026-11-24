@@ -40,7 +40,7 @@ from kite_drp.train.features import CellFeatureSet, DrugFeatureSet
 from kite_drp.train.local_graph import LocalGraphBundle, build_local_graphs
 
 DEFAULT_PPI_FEATURE_CONFIG: dict[str, Any] = {
-    "version": 1,
+    "version": 2,
     "ppi_min_score": 0.7,
     "neighbor_mode": "ppi",  # ppi | pseudo
     "max_neighbors_per_target": 8,
@@ -54,6 +54,47 @@ DEFAULT_PPI_FEATURE_CONFIG: dict[str, Any] = {
 
 TIER_CODES = {"none": 0, "gdsc_only": 1, "ot": 2}
 SUMMARY_STATS = ("mean", "max", "min", "std", "frac_observed", "frac_altered")
+META_NAMES = (
+    "coverage",
+    "tier_ot",
+    "tier_gdsc_only",
+    "tier_none",
+    "n_roots_norm",
+    "n_neighbors_norm",
+    "log_n_roots",
+    "log_n_neighbors",
+)
+
+
+def build_meta_features(
+    *,
+    n_roots: np.ndarray,
+    n_neighbors: np.ndarray,
+    tier: np.ndarray,
+    coverage: np.ndarray,
+) -> np.ndarray:
+    """药物级元特征：覆盖、tier、根/邻居数。
+
+    这些特征与细胞无关，逐药常数。它们不能改变逐药 SCC（层内排序对
+    药物级常数不敏感），主要用于：(a) ``t2_meta`` 混杂对照；
+    (b) reliability gate 的输入；(c) 全局指标诊断。
+    """
+
+    coverage = np.asarray(coverage, dtype=bool)
+    tier = np.asarray(tier)
+    n_roots = np.asarray(n_roots, dtype=np.float32)
+    n_neighbors = np.asarray(n_neighbors, dtype=np.float32)
+    meta = np.zeros((len(coverage), len(META_NAMES)), dtype=np.float32)
+    meta[:, 0] = coverage.astype(np.float32)
+    meta[:, 1] = (tier == TIER_CODES["ot"]).astype(np.float32)
+    meta[:, 2] = (tier == TIER_CODES["gdsc_only"]).astype(np.float32)
+    meta[:, 3] = (tier == TIER_CODES["none"]).astype(np.float32)
+    denom = 64.0
+    meta[:, 4] = np.clip(n_roots / denom, 0.0, 1.0)
+    meta[:, 5] = np.clip(n_neighbors / denom, 0.0, 1.0)
+    meta[:, 6] = np.log1p(n_roots) / np.log1p(denom)
+    meta[:, 7] = np.log1p(n_neighbors) / np.log1p(denom)
+    return meta
 
 
 @dataclass
@@ -66,6 +107,7 @@ class PPIFeatureBundle:
     neighbor_pathway: np.ndarray  # (n_drugs, P)
     coverage: np.ndarray  # (n_drugs,) bool
     tier: np.ndarray  # (n_drugs,) int8
+    meta: np.ndarray  # (n_drugs, F_meta) float32，药物级元特征
     summary_names: list[str]
     rwr_names: list[str]
     audit: pd.DataFrame
@@ -78,6 +120,10 @@ class PPIFeatureBundle:
     @property
     def rwr_dim(self) -> int:
         return int(self.rwr.shape[2])
+
+    @property
+    def meta_dim(self) -> int:
+        return int(self.meta.shape[1])
 
 
 def _resolve_config(config: dict[str, Any] | None) -> dict[str, Any]:
@@ -198,10 +244,13 @@ def _build_rwr_adjacency(
     # 孤立节点用自环，避免 RWR 质量消失。
     isolated = np.flatnonzero(degree <= 0)
     if isolated.size:
-        adjacency = adjacency + sparse.coo_matrix(
-            (np.ones(isolated.size, dtype=np.float32), (isolated, isolated)),
-            shape=adjacency.shape,
-        ).tocsr()
+        adjacency = (
+            adjacency
+            + sparse.coo_matrix(
+                (np.ones(isolated.size, dtype=np.float32), (isolated, isolated)),
+                shape=adjacency.shape,
+            ).tocsr()
+        )
     return adjacency, genes
 
 
@@ -302,7 +351,7 @@ def _build_cache_key(
         "gene_space_sha256": hashlib.sha256(
             "\n".join(features.gene_ids).encode("utf-8")
         ).hexdigest(),
-        "code_version": "ppi_features_v1",
+        "code_version": "ppi_features_v2",
     }
     return _sha256_payload(core), core
 
@@ -374,6 +423,7 @@ def build_ppi_features(
                 neighbor_pathway=arrays["neighbor_pathway"],
                 coverage=arrays["coverage"].astype(bool),
                 tier=arrays["tier"].astype(np.int8),
+                meta=arrays["meta"].astype(np.float32),
                 summary_names=[str(value) for value in arrays["summary_names"]],
                 rwr_names=[str(value) for value in arrays["rwr_names"]],
                 audit=audit,
@@ -532,6 +582,12 @@ def build_ppi_features(
     elif str(cfg["random_control"]) != "none":
         raise ValueError(f"未知 random_control：{cfg['random_control']}")
 
+    meta = build_meta_features(
+        n_roots=n_roots,
+        n_neighbors=n_neighbors,
+        tier=tier,
+        coverage=coverage,
+    )
     summary_names = _summary_names()
     rwr_names = _rwr_names()
     audit = pd.DataFrame(audit_rows)
@@ -545,8 +601,10 @@ def build_ppi_features(
         "n_covered": int(coverage.sum()),
         "summary_dim": len(summary_names),
         "rwr_dim": len(rwr_names),
+        "meta_dim": len(META_NAMES),
         "summary_names": summary_names,
         "rwr_names": rwr_names,
+        "meta_names": list(META_NAMES),
         "coverage_counts": {
             "ot": int((tier == TIER_CODES["ot"]).sum()),
             "gdsc_only": int((tier == TIER_CODES["gdsc_only"]).sum()),
@@ -562,6 +620,7 @@ def build_ppi_features(
         neighbor_pathway=neighbor_pathway,
         coverage=coverage,
         tier=tier,
+        meta=meta,
         summary_names=np.asarray(summary_names, dtype=np.str_),
         rwr_names=np.asarray(rwr_names, dtype=np.str_),
     )
@@ -577,6 +636,7 @@ def build_ppi_features(
         neighbor_pathway=neighbor_pathway,
         coverage=coverage,
         tier=tier,
+        meta=meta,
         summary_names=summary_names,
         rwr_names=rwr_names,
         audit=audit,
@@ -586,7 +646,9 @@ def build_ppi_features(
 
 __all__ = [
     "DEFAULT_PPI_FEATURE_CONFIG",
+    "META_NAMES",
     "PPIFeatureBundle",
     "TIER_CODES",
+    "build_meta_features",
     "build_ppi_features",
 ]

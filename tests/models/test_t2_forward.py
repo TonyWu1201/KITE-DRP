@@ -106,9 +106,10 @@ def test_t2_context_is_masked_by_coverage() -> None:
     model = _model()
     batch = _batch(coverage=torch.tensor([True, False, True]))
     with torch.no_grad():
-        context = model._context(batch)
-    assert context is not None
+        context, gate = model._context(batch)
+    assert context is not None and gate is not None
     assert float(context[1].abs().max()) == 0.0
+    assert float(gate[1]) == 0.0
     assert float(context[0].abs().max()) > 0.0
     assert float(context[2].abs().max()) > 0.0
 
@@ -119,9 +120,10 @@ def test_t2_uncovered_rows_stay_at_p1_even_with_alpha() -> None:
     with torch.no_grad():
         # 覆盖为 0 时 context 必须为 0；此时 T2 仍可预测，但主融合 gate 为 1。
         # 这里只验证 context 的精确回退，不假设 y_t2 == y_p1。
-        context = model._context(batch)
-    assert context is not None
+        context, gate = model._context(batch)
+    assert context is not None and gate is not None
     assert float(context.abs().max()) == 0.0
+    assert float(gate.abs().max()) == 0.0
 
 
 def test_t2_keeps_backbone_eval_and_frozen() -> None:

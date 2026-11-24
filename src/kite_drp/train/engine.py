@@ -91,9 +91,7 @@ def _loss(
             loss = loss + graph_cls_weight * graph_bce
     tower_weight = float(config.get("tower_weight", 0.0))
     if tower_weight > 0 and "y_t2" in model_output.aux:
-        tower_reg = F.huber_loss(
-            model_output.aux["y_t2"], batch.y, delta=delta, reduction="none"
-        )
+        tower_reg = F.huber_loss(model_output.aux["y_t2"], batch.y, delta=delta, reduction="none")
         tower_mask = (
             batch.label_mask.to(tower_reg.dtype)
             if batch.label_mask is not None
@@ -109,6 +107,24 @@ def _loss(
             tower_cls_mask = tower_mask * mask.to(tower_bce.dtype)
             tower_bce = (tower_bce * tower_cls_mask).sum() / tower_cls_mask.sum().clamp_min(1.0)
             loss = loss + tower_cls_weight * tower_bce
+    ctx_weight = float(config.get("ctx_weight", 0.0))
+    if ctx_weight > 0 and "y_ctx" in model_output.aux:
+        ctx_reg = F.huber_loss(model_output.aux["y_ctx"], batch.y, delta=delta, reduction="none")
+        ctx_mask = (
+            batch.label_mask.to(ctx_reg.dtype)
+            if batch.label_mask is not None
+            else torch.ones_like(ctx_reg)
+        )
+        ctx_reg = (ctx_reg * ctx_mask).sum() / ctx_mask.sum().clamp_min(1.0)
+        loss = loss + ctx_weight * ctx_reg
+        ctx_cls_weight = float(config.get("ctx_cls_weight", 0.0))
+        if ctx_cls_weight > 0 and "logits_ctx" in model_output.aux:
+            ctx_bce = F.binary_cross_entropy_with_logits(
+                model_output.aux["logits_ctx"], batch.y_cls, reduction="none"
+            )
+            ctx_cls_mask = ctx_mask * mask.to(ctx_bce.dtype)
+            ctx_bce = (ctx_bce * ctx_cls_mask).sum() / ctx_cls_mask.sum().clamp_min(1.0)
+            loss = loss + ctx_cls_weight * ctx_bce
     if rank_weight > 0 and batch.drug_idx is not None:
         rank_mask = batch.label_mask if batch.label_mask is not None else None
         ranking = pairwise_rank_loss(
@@ -167,6 +183,9 @@ def evaluate(
     graph_predictions: list[np.ndarray] = []
     p1_predictions: list[np.ndarray] = []
     t2_predictions: list[np.ndarray] = []
+    t2_ctx_predictions: list[np.ndarray] = []
+    ctx_predictions: list[np.ndarray] = []
+    context_gate_values: list[np.ndarray] = []
     alpha_values: list[np.ndarray] = []
     coverage_values: list[np.ndarray] = []
     for batch in loader:
@@ -179,6 +198,13 @@ def evaluate(
             p1_predictions.append(output.aux["y_p1"].float().cpu().numpy())
         if "y_t2" in output.aux:
             t2_predictions.append(output.aux["y_t2"].float().cpu().numpy())
+        if "y_t2_ctx" in output.aux:
+            t2_ctx_predictions.append(output.aux["y_t2_ctx"].float().cpu().numpy())
+        if "y_ctx" in output.aux:
+            ctx_predictions.append(output.aux["y_ctx"].float().cpu().numpy())
+        gate = output.aux.get("context_gate")
+        if isinstance(gate, torch.Tensor):
+            context_gate_values.append(gate.detach().float().cpu().numpy().reshape(-1))
         alpha = output.aux.get("t2_alpha")
         if alpha is not None:
             if isinstance(alpha, torch.Tensor):
@@ -210,6 +236,12 @@ def evaluate(
         frame["y_p1_pred"] = np.concatenate(p1_predictions)
     if t2_predictions:
         frame["y_t2_pred"] = np.concatenate(t2_predictions)
+    if t2_ctx_predictions:
+        frame["y_t2_ctx_pred"] = np.concatenate(t2_ctx_predictions)
+    if ctx_predictions:
+        frame["y_ctx_pred"] = np.concatenate(ctx_predictions)
+    if context_gate_values:
+        frame["context_gate"] = np.concatenate(context_gate_values)
     if alpha_values:
         frame["t2_alpha"] = np.concatenate(alpha_values)
     if coverage_values:
@@ -227,16 +259,19 @@ def evaluate(
             frame["y_true"].to_numpy()[mask],
             graph_pred[mask],
         )
-    for column, key in (("y_p1_pred", "p1"), ("y_t2_pred", "t2")):
+    for column, key in (
+        ("y_p1_pred", "p1"),
+        ("y_t2_pred", "t2"),
+        ("y_t2_ctx_pred", "t2_ctx"),
+        ("y_ctx_pred", "ctx"),
+    ):
         if column not in frame.columns:
             continue
         metrics[f"{key}_regression"] = regression_metrics(
             frame["y_true"].to_numpy()[mask],
             frame[column].to_numpy()[mask],
         )
-        metrics[f"{key}_per_drug"] = per_drug_metrics(
-            frame.assign(y_pred=frame[column])
-        )
+        metrics[f"{key}_per_drug"] = per_drug_metrics(frame.assign(y_pred=frame[column]))
     return metrics, frame
 
 
@@ -372,6 +407,8 @@ def fit_teacher(
                 "graph_pred_gate",
                 "alpha",
                 "context_scale",
+                "ctx_gate",
+                "netgp_gate",
             )
             if hasattr(eval_model, name)
         }
@@ -398,6 +435,18 @@ def fit_teacher(
                     "rank_weight": round(rank_weight, 4),
                     "val_r2": round(val_metrics["regression"]["r2"], 4),
                     "val_scc": round(val_metrics["regression"]["scc"], 4),
+                    "val_t2_scc": round(
+                        val_metrics.get("t2_per_drug", {}).get("scc_mean", float("nan")),
+                        4,
+                    ),
+                    "val_t2_ctx_scc": round(
+                        val_metrics.get("t2_ctx_per_drug", {}).get("scc_mean", float("nan")),
+                        4,
+                    ),
+                    "val_ctx_scc": round(
+                        val_metrics.get("ctx_per_drug", {}).get("scc_mean", float("nan")),
+                        4,
+                    ),
                     "val_graph_scc": round(
                         val_metrics.get("graph_regression", {}).get("scc", float("nan")),
                         4,
@@ -468,6 +517,12 @@ def _monitor_value(metrics: dict[str, Any], monitor: str) -> float:
         return float(metrics["regression"]["pcc"])
     if monitor == "val_per_drug_scc":
         return float(metrics.get("per_drug", {}).get("scc_mean", float("nan")))
+    if monitor == "val_t2_per_drug_scc":
+        return float(metrics.get("t2_per_drug", {}).get("scc_mean", float("nan")))
+    if monitor == "val_t2_ctx_per_drug_scc":
+        return float(metrics.get("t2_ctx_per_drug", {}).get("scc_mean", float("nan")))
+    if monitor == "val_ctx_per_drug_scc":
+        return float(metrics.get("ctx_per_drug", {}).get("scc_mean", float("nan")))
     raise KeyError(f"未知 monitor：{monitor}")
 
 
