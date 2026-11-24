@@ -5,6 +5,7 @@
 - 配置：`configs/teacher/t2.yaml`
 - 基线：同 split/fold 的冻结 T0-P1（`init_from`）
 - 相关：`plans&notes/2026-11-21_无图双塔与DTI-PPI实施.md`
+- 后续先验调研：`plans&notes/2026-11-23_PPI-DTI先验学习与T2改进调研.md`
 
 ## 1. 定位
 

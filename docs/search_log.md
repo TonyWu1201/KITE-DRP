@@ -8,6 +8,7 @@
 | 日期 | 数据库 | 检索式 | 命中数 | 筛选后保留 | 结论/备注 |
 |---|---|---|---|---|---|
 | 2026-11-09 | PubMed | `("drug response prediction" OR "drug sensitivity prediction") AND (knowledge distillation OR teacher-student) AND (graph neural network OR multi-omics)` | — | — | 计划书初稿检索，详见 `plans&notes/` 文献笔记 |
+| 2026-11-23 | Europe PMC / Crossref / bioRxiv / 出版方页面 | `("drug response" OR "drug sensitivity") AND (PPI OR "protein-protein interaction" OR DTI OR "knowledge graph") AND (propagation OR pretrain* OR "auxiliary task" OR "cold drug")`；并追查 NetGP/DGDRP/CSG²A/KGDRP/DTLCDR/DGP-LA/PINNACLE/XPert/Pillbox 的全文与 ablation | 277（PPI 主式）；10（KG 主式）；33（pretrain/self-supervised 主式） | 约 20 | 结论与改进方案见 `plans&notes/2026-11-23_PPI-DTI先验学习与T2改进调研.md`；重点：NetGP 传播、KGDRP 辅助任务、DTLCDR DTI 补全、XPert/Pillbox 负结果 |
 | 待补 | — | — | — | — | 补录 2026-11 前的检索式与导出文件位置 |
 
 ## 说明
